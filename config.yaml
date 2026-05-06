@@ -1,0 +1,125 @@
+# =============================================================================
+# HRC Steel Pipeline — Configuration
+# =============================================================================
+# This is the ONLY file you need to edit. After editing, just run:
+#     python3 run.py                      → refresh the HTML report
+#     streamlit run dashboard/app.py      → open the live dashboard
+# =============================================================================
+
+
+# ---------- DATA ----------
+data:
+  file: "data/Raw_data.xlsx"
+
+  # The file has TWO sheets: China (USD) and India (INR). Each is configured
+  # independently. To turn off one region, set enabled: false.
+  regions:
+
+    china:
+      enabled: true
+      sheet: "China"
+      currency: "USD"
+      date_column: "Month"
+      target: "HRC price (China FOB)"
+      # Drivers: 'auto' = use ALL other numeric columns as drivers automatically.
+      # When you add or remove columns from the sheet, the pipeline adapts.
+      # Or list specific columns:
+      #   drivers: ["Iron Ore 62%Fe (China CFR)", "HCC (Aus FOB)"]
+      drivers: auto
+      # Spread formula: HRC − (iron_ore_weight × iron_ore + hcc_weight × hcc)
+      spread:
+        iron_ore_column: "Iron Ore 62%Fe (China CFR)"
+        iron_ore_weight: 1.6
+        hcc_column: "HCC (Aus FOB)"
+        hcc_weight: 0.9
+
+    india:
+      enabled: true
+      sheet: "India"
+      currency: "INR"
+      date_column: "Month"
+      target: "HRC (FBD) INR/t"
+      drivers: auto
+      spread:
+        iron_ore_column: "Iron Ore Odisha INR/t"
+        iron_ore_weight: 1.6
+        hcc_column: "Import HCC (India CFR) INR/t"
+        hcc_weight: 0.9
+
+
+# ---------- MODELS ----------
+# To remove a model:  set enabled: false
+# To add a new model: drop a new file in models/ that implements the Model
+#                     interface (see models/base.py), then add a block here.
+models:
+  arimax:
+    enabled: true
+    order: [1, 1, 1]                 # (p, d, q)
+    seasonal_order: [0, 0, 0, 0]     # (P, D, Q, s) — set s=12 for monthly seasonality
+    forecast_horizon: 12             # months ahead to forecast
+    test_size: 12                    # last N months held out for OOS test
+    regions: ["china", "india"]      # which regions to fit this model on
+
+  ardl:
+    enabled: true
+    ar_order: 2                      # AR lags on the target (HRC)
+    dl_order: 2                      # distributed lag on each driver
+    use_order_selection: false       # true = grid-search best lags (only safe with ≤4 drivers)
+    forecast_horizon: 12
+    test_size: 12
+    regions: ["china", "india"]
+
+  garch:
+    enabled: true
+    p: 1
+    q: 1
+    mean: "Constant"
+    vol: "GARCH"
+    dist: "normal"
+    regions: ["china", "india"]
+
+
+# ---------- ANALYSIS PARAMETERS ----------
+analysis:
+  stationarity:
+    significance: 0.05               # ADF p-value threshold
+
+  lead_lag:
+    max_lag_months: 12               # CCF + Granger lookback window
+    granger_significance: 0.05
+    rolling_window: 12               # months for rolling correlations
+
+  regimes:
+    n_regimes: 3                     # K-means clusters
+    random_state: 42
+
+  events:
+    # Add or remove episodes here. Each one gets analysed in the report.
+    windows_months: [3, 6]           # months before/after each event date
+    episodes:
+      - name: "Nov 2021 Steel Supercycle Peak"
+        date: "2021-11-01"
+        type: "peak"
+      - name: "Ukraine War & Multi-Year Correction"
+        date: "2022-02-01"
+        type: "shock"
+      - name: "China Stimulus Recovery Attempt"
+        date: "2024-02-01"
+        type: "policy"
+
+  attribution:
+    rolling_window: 24               # months for rolling regression
+
+  cyclicity:
+    n_regimes: 4                     # GMM regime count (4 recommended for full HRC analysis)
+    random_state: 42
+    peak_prominence_pct: 5.0         # peak detection sensitivity (% of std)
+    min_distance_months: 4           # minimum spacing between detected peaks/troughs
+
+
+# ---------- OUTPUT ----------
+output:
+  report_path: "outputs/HRC_Steel_Report.html"
+  results_json: "outputs/results.json"
+  cache_dir: ".cache"
+  plotly_theme: "plotly_white"

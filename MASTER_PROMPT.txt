@@ -1,0 +1,119 @@
+================================================================
+MASTER PROMPT — HRC Macro Calendar Monthly Update
+================================================================
+Paste this into a NEW Claude.ai conversation each month.
+Only change the two dates marked [CHANGE THIS].
+================================================================
+
+I'm an HRC steel commodity analyst at Tata Steel. I maintain a macro
+event calendar in YAML format that feeds an internal dashboard.
+I need you to generate the next batch of calendar entries for me.
+
+CONTEXT:
+- Today's date: [CHANGE THIS — e.g., "May 5, 2026"]
+- I need events scheduled between today and: [CHANGE THIS — e.g., "July 15, 2026"]
+- Output format: YAML entries matching the schema below
+- Output should be ready to paste directly into my file — no preamble, no
+  explanation, no markdown code fences around the YAML.
+
+EVENTS I WANT YOU TO INCLUDE (HRC-relevant only):
+- US: CPI, PPI, PCE Deflator, FOMC decisions, NFP/Employment Situation,
+  Retail Sales, ISM Manufacturing PMI, ISM Services PMI, GDP releases
+- China: GDP (quarterly), Industrial Output, Retail Sales, Fixed Asset
+  Investment, Trade Balance, CPI, PPI
+- Europe: ECB rate decisions, Eurozone preliminary PMI (manufacturing)
+- Commodity-specific: OPEC+ meetings (when scheduled), EIA crude inventory
+  (only flag if a major OPEC announcement falls in window)
+
+EVENTS TO SKIP (not HRC-relevant):
+- UK CPI, BOE decisions, UK GDP, UK PMI
+- Japan CPI, BOJ decisions (unless a major rate hike is signaled)
+- All EM data except India (and India events I source separately)
+- Eurozone services PMI (manufacturing only)
+- Routine weekly EIA reports
+- UMich consumer sentiment, Conference Board, JOLTS, ADP
+
+YAML SCHEMA (copy this structure exactly):
+
+  - date: "YYYY-MM-DD"
+    name: "Event Name — Period (e.g., 'US CPI — May 2026')"
+    country: USA | CHN | EUR
+    impact: HIGH | MED | LOW
+    category: inflation | central_bank | employment | gdp | manufacturing | consumer | china_macro | commodity_supply | geopolitical
+    consensus: "Brief consensus expectation in one sentence"
+    affects_regions: [china]  # or [china, india]
+    primary_channel: dxy_to_iron_ore | china_demand_direct | china_export_intent | us_demand_to_china_exports | european_steel_demand | oil_to_steel_input
+    mechanism: |
+      Multi-sentence paragraph (4-8 sentences) explaining the transmission
+      chain from this event to HRC steel prices. Cover: which raw material
+      moves first, why, expected magnitude, regional differences (China FOB
+      vs India FBD), and any second-order effects. Use trader-grade tone —
+      declarative, specific, professional. Match the depth of an institutional
+      research note.
+    expected_hrc_reaction: |
+      2-4 sentences with specific magnitude estimates. Format: "[Hot/Cool]
+      surprise [threshold] → iron ore [%/range] over [time], HRC China FOB
+      [$/range] over [time], [India effect if applicable]." Reference both
+      the upside and downside scenarios.
+
+IMPACT TIERING RULES:
+- HIGH = expect material HRC move (>$10/t China FOB or >INR 500/t India FBD)
+  within days of release. Includes: all CPI/PCE prints, FOMC, NFP, China
+  GDP/IP, US Retail Sales, ISM Manufacturing.
+- MED = potential second-order HRC effect via raw materials or currency.
+  Includes: PPI, ISM Services, China CPI/PPI, China Trade Balance, ECB,
+  Eurozone PMI.
+- LOW = minor/monitor only.
+
+TRANSMISSION CHANNEL ASSIGNMENTS (use these consistently):
+- dxy_to_iron_ore: US inflation, FOMC, NFP, US PCE — anything that moves the dollar
+- china_demand_direct: China GDP, IP, Retail Sales, FAI, China CPI/PPI
+- china_export_intent: China Trade Balance — affects India via import parity
+- us_demand_to_china_exports: US Retail Sales, US ISM, US GDP — global demand chain
+- european_steel_demand: ECB, Eurozone PMI
+- oil_to_steel_input: OPEC+, major oil supply shocks
+
+REGIONAL APPLICATION:
+- US data → almost always [china, india] (works through DXY → INR)
+- China data → [china] for China-only events, [china, india] for trade-balance / export-pressure events
+- ECB / Eurozone PMI → [china] only
+- Oil → [china, india]
+
+PRIORITISATION:
+Lead with HIGH-impact events. Within HIGH, prioritise the "Mega Week"
+clusters — periods where 3+ HIGH events fall within 5 trading days
+(e.g., FOMC week typically has CPI + FOMC + NFP).
+
+TONE FOR MECHANISM PROSE:
+- Declarative trader-grade, e.g., "Hot CPI keeps Fed hawkish → DXY
+  strength → iron ore weakens" not "When CPI is hot, the Fed often..."
+- Specific magnitude estimates with ranges: "iron ore -3 to -5%"
+- Use technical terms freely: DXY, dot plot, SEP, basis points, BPS,
+  carry, INR depreciation, CFR, FOB, FBD.
+- Reference the Tata BPM convention: spread compression, mill margin,
+  raw material pass-through, import-parity squeeze.
+
+DEDUPLICATION:
+Recurring monthly events (CPI, PPI, NFP, PCE, ISM) — each month gets
+a NEW entry with new date. Reuse the same mechanism prose word-for-word
+across these recurring entries; only change date, name, and consensus.
+
+VERIFICATION:
+- For central bank decisions (FOMC, ECB, BOJ, BOE), verify dates against
+  the official central bank calendar before including
+- For US data releases, verify against the BLS / BEA release schedule
+- For China data, releases happen approximately on the 15th-18th of each
+  month; verify exact dates from official Chinese statistics calendar
+- Do not invent or guess dates — search the web first.
+
+OUTPUT INSTRUCTIONS:
+- Begin output with "  - date:" on the first line (note the 2-space indent;
+  this matches my file's existing indentation)
+- No preamble, no explanation, no "Here are the events:" line
+- No markdown code fences (no triple backticks)
+- Just the raw YAML entries, sorted by date ascending
+- After the last entry, stop. No commentary.
+
+================================================================
+END OF PROMPT — paste everything above into a new Claude.ai chat.
+================================================================

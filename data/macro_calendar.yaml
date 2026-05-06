@@ -1,0 +1,711 @@
+# =============================================================================
+# HRC Macro Event Calendar — MASTER EVENT LIBRARY
+# =============================================================================
+# This is your master library of HRC-relevant macro events. The pipeline
+# automatically filters to events between TODAY and TODAY + 45 DAYS at runtime.
+# You don't need to update window dates — only add/remove events.
+#
+# WHAT TO EDIT:
+#   • Add new events as you learn about them (FOMC, ECB, scheduled releases).
+#     Keep at least 2-3 months ahead populated.
+#   • Past events can stay in the file — the rolling filter ignores them.
+#     They make useful templates for next month's recurring events.
+#   • Once a month: scan ForexFactory or your manager's reports, add ~10-15
+#     new events for the month after.
+#
+# WHAT NOT TO EDIT:
+#   • The structure (date, name, etc. — pipeline expects these keys).
+#   • The 'category' values — must be one of:
+#         inflation, central_bank, employment, gdp, manufacturing,
+#         consumer, china_macro, commodity_supply, geopolitical
+#
+# IMPACT TIERS:
+#   HIGH = expect material HRC move within days of release
+#   MED  = potential second-order HRC effect via raw materials
+#   LOW  = monitor only; small expected HRC impact
+#
+# DATA SOURCES FOR DATES:
+#   • Fed: federalreserve.gov/monetarypolicy/fomccalendars.htm
+#   • ECB: ecb.europa.eu/press/calendars/mgcgc/html/index.en.html
+#   • US economic releases (CPI, NFP): bls.gov / bea.gov calendars
+#   • China data: National Bureau of Statistics (around 15-18 each month)
+#   • OPEC+: opec.org/opec_web/en/press_room/index.htm
+#   • EIA: eia.gov/petroleum/weekly (every Wednesday 10:30 ET)
+# =============================================================================
+
+window:
+  description: "Auto-rolling 45-day forward window — events filtered at runtime"
+
+events:
+
+  # ==========================================================================
+  # APRIL 2026 — Pre-Mega-Week + Mega Week (Apr 28 – May 2)
+  # ==========================================================================
+
+  - date: "2026-04-09"
+    name: "EIA Crude Oil Inventory"
+    country: USA
+    impact: MED
+    category: commodity_supply
+    consensus: "Weekly draw/build vs forecast"
+    affects_regions: [china, india]
+    primary_channel: oil_to_steel_input
+    mechanism: |
+      Oil price is an upstream input to steel production (energy + freight)
+      and an indicator of broader industrial demand. Large draws push WTI/Brent
+      up, lifting steel mill energy costs and freight rates. For China FOB:
+      modest negative for spread (cost up). For India: same direction but
+      amplified via shipping costs on imported HCC.
+    expected_hrc_reaction: |
+      Inventory draw of >5M barrels → mild HRC cost-push pressure over 7-14
+      days. Build of >5M barrels → marginal cost relief; no immediate HRC
+      follow-through.
+
+  - date: "2026-04-10"
+    name: "US CPI — March 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "2.8% YoY headline expected; core 3.0% YoY"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      US CPI determines the Fed's near-term rate path, which drives the
+      dollar index (DXY). DXY is inversely correlated with USD-priced
+      commodities — iron ore especially. Hot CPI → hawkish Fed → DXY
+      strength → iron ore weakens → cheaper raw materials for Chinese mills
+      (margin support, price pressure mixed). Cool CPI does the opposite.
+      For India, the channel runs through INR: hot CPI → DXY strength →
+      INR weakness → imported HCC INR cost rises → India spread compresses.
+    expected_hrc_reaction: |
+      Hot surprise (>3.0% headline): iron ore -2 to -4% in 5 trading days,
+      HRC China FOB modestly weaker over 30 days, India spread compresses
+      INR 500-1000/t. Cool surprise (<2.6%): iron ore +2 to +5%, China FOB
+      firms, India spread benefits from INR strength.
+
+  - date: "2026-04-11"
+    name: "US PPI — March 2026"
+    country: USA
+    impact: MED
+    category: inflation
+    consensus: "Wholesale inflation; leads CPI by 1-2 months"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      PPI is upstream of CPI by 4-8 weeks. Sticky PPI signals CPI will stay
+      elevated, reinforcing the Fed-hawkish chain described under CPI. Less
+      market-moving than CPI on the day of release, but a strong PPI
+      surprise can shift the next month's CPI expectation and pre-position
+      iron ore.
+    expected_hrc_reaction: |
+      Material PPI surprise (>0.5% MoM beat) typically front-runs the next
+      CPI cycle's iron ore move. Stand-alone HRC reaction is muted within
+      first 7 days.
+
+  - date: "2026-04-14"
+    name: "China Trade Balance — March 2026"
+    country: CHN
+    impact: MED
+    category: china_macro
+    consensus: "Surplus/deficit reflects export demand & import strength"
+    affects_regions: [china, india]
+    primary_channel: china_export_intent
+    mechanism: |
+      China's trade surplus is a real-time indicator of external demand
+      absorption. A widening surplus signals strong global willingness to
+      absorb Chinese exports — including steel exports. A narrowing surplus
+      signals export weakness, which in turn signals Chinese mills will
+      redirect output to domestic market, *increasing China FOB price
+      competition* and *raising risk of Chinese export dumping into India*.
+      Particularly important for India: when Chinese exports are pressured,
+      Indian domestic prices face import-parity squeeze.
+    expected_hrc_reaction: |
+      Surplus narrowing significantly → bearish for India HRC FBD via
+      import pressure (-INR 500-1500/t over 30 days). Surplus expanding →
+      benign for both regions; supports the "demand absorption" thesis.
+
+  - date: "2026-04-15"
+    name: "US Retail Sales — March 2026"
+    country: USA
+    impact: HIGH
+    category: consumer
+    consensus: "MoM change in headline & control group"
+    affects_regions: [china]
+    primary_channel: us_demand_to_china_exports
+    mechanism: |
+      US consumer demand is an indirect driver of Chinese steel exports
+      through the durable goods supply chain. Strong retail sales (especially
+      control group ex-autos/gas/building) → upstream demand for white goods,
+      autos, construction inputs — all of which raise the implied global
+      steel demand curve. Channel: US retail strength → Chinese export
+      orders firm → China HRC FOB supported.
+    expected_hrc_reaction: |
+      Strong control group (>+0.5% MoM) → mild positive for China FOB over
+      30-60 days. Recession-signal weak (<-0.3% MoM) → China FOB pressure
+      as export demand fears materialise.
+
+  - date: "2026-04-16"
+    name: "US Fed Speakers (multiple)"
+    country: USA
+    impact: MED
+    category: central_bank
+    consensus: "Various; watch for FOMC pre-meeting tone-setting"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Fed speakers in the days before FOMC traditionally pre-position market
+      expectations. Hawkish speeches by voting members shift implied policy
+      path, moving DXY ahead of the official decision.
+    expected_hrc_reaction: |
+      Coordinated hawkish messaging from multiple voting members → iron ore
+      weakness 5-10 trading days. Single speech rarely material in isolation.
+
+  - date: "2026-04-21"
+    name: "China Q1 2026 GDP (Preliminary)"
+    country: CHN
+    impact: HIGH
+    category: china_macro
+    consensus: "Annual growth rate vs 5.0% target"
+    affects_regions: [china, india]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Single most important data point for HRC of the entire 45-day window.
+      China is ~55% of global steel demand. Q1 GDP signals whether the
+      property/infrastructure cycle is recovering, stagnating, or
+      deteriorating. Direct chain: China GDP miss → property completion
+      delays → seaborne iron ore demand falls → iron ore prices drop → HRC
+      China FOB drops. Cross-region effect: China weakness raises export-
+      dumping risk for India FBD.
+    expected_hrc_reaction: |
+      GDP miss (<4.5%): iron ore -5 to -8%, HRC China FOB -$30 to -$60/t
+      over 60 days, India FBD pressured INR 1500-3000/t via import
+      competition. GDP beat (>5.5%): iron ore +5 to +10%, HRC China FOB +$30
+      to +$70/t, India spread benefits as Chinese export pressure eases.
+
+  - date: "2026-04-21"
+    name: "China Retail Sales & Industrial Output — March"
+    country: CHN
+    impact: MED
+    category: china_macro
+    consensus: "Released alongside GDP"
+    affects_regions: [china, india]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Industrial output is the more relevant of the two for HRC: it directly
+      tracks Chinese steel-consuming sector activity (autos, machinery,
+      shipbuilding, white goods). Industrial output miss confirms a GDP miss
+      at component level and amplifies the iron ore reaction.
+    expected_hrc_reaction: |
+      Already partly priced via the GDP release. Material divergence (e.g.,
+      GDP in line but IP miss) creates 2-day delayed iron ore reaction of
+      1-3%.
+
+  - date: "2026-04-24"
+    name: "Eurozone Preliminary PMI (Mfg + Services) — April"
+    country: EUR
+    impact: MED
+    category: manufacturing
+    consensus: "Manufacturing PMI vs 50 expansion line"
+    affects_regions: [china]
+    primary_channel: european_steel_demand
+    mechanism: |
+      European manufacturing PMI is a leading indicator for European steel
+      consumption, which historically absorbs 8-12% of Chinese steel exports.
+      A reading sustainably below 48 signals industrial recession, which
+      reduces seaborne steel demand and pressures Chinese export prices —
+      indirectly weighing on HRC China FOB. Indian channel is negligible.
+    expected_hrc_reaction: |
+      Manufacturing PMI <48 (recession territory) → modest China FOB
+      pressure ($5-15/t over 30 days). PMI >52 (expansion) → supportive.
+
+  - date: "2026-04-28"
+    name: "US PCE Deflator — March 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "Core PCE MoM and YoY; Fed's preferred gauge"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      PCE is the Fed's preferred inflation measure. Released the day before
+      FOMC, it can pre-position the rate decision. Same DXY → iron ore chain
+      as CPI, but with greater market reaction because (a) it directly
+      informs FOMC, and (b) the timing is two business days before the
+      meeting.
+    expected_hrc_reaction: |
+      Core PCE >0.3% MoM (hot): pre-positions hawkish Fed → DXY up → iron
+      ore weakness sustained through FOMC week. Cool PCE (<0.2% MoM): iron
+      ore rallies into FOMC. India INR moves significantly.
+
+  - date: "2026-04-29"
+    name: "FOMC Decision — April 2026"
+    country: USA
+    impact: HIGH
+    category: central_bank
+    consensus: "Hold at 3.50-3.75%; ~94% probability"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      The single most market-moving event of the Mega Week. Three things to
+      watch: (1) the rate decision itself (mostly pre-priced), (2) any shift
+      in forward guidance language, (3) Powell's press conference at 2:30 PM
+      ET. Hawkish hold (extended "higher for longer" language) → DXY rallies
+      → iron ore weakens. Dovish hold (cuts re-introduced) → DXY weakens →
+      iron ore + commodities rally. Press conference often moves more than
+      the decision itself.
+    expected_hrc_reaction: |
+      Hawkish surprise: iron ore -3 to -7% over 5 trading days; HRC China
+      FOB -$15 to -$40/t over 30 days; INR weakness pressures India FBD
+      spread. Dovish surprise: iron ore +5 to +8%; HRC China FOB firms;
+      India spread benefits from INR rally.
+
+  - date: "2026-04-30"
+    name: "ECB Rate Decision — April 2026"
+    country: EUR
+    impact: MED
+    category: central_bank
+    consensus: "Hold expected at 2.0%; oil shock has pushed CPI forecast to 2.6%"
+    affects_regions: [china]
+    primary_channel: european_steel_demand
+    mechanism: |
+      ECB policy stance affects the European industrial demand outlook through
+      financing conditions for construction and capex. Hawkish ECB → tighter
+      EU industrial activity → weaker European steel imports from China.
+      Channel is slower (months not weeks) and less reliable than the FOMC
+      → DXY → iron ore chain.
+    expected_hrc_reaction: |
+      Direct HRC impact within 30 days is small (<1% China FOB). Worth
+      watching mainly for the cumulative European demand picture across
+      multiple ECB meetings.
+
+  - date: "2026-04-30"
+    name: "US Q1 2026 GDP — Advance Estimate"
+    country: USA
+    impact: HIGH
+    category: gdp
+    consensus: "First Q1 GDP print"
+    affects_regions: [china]
+    primary_channel: us_demand_to_china_exports
+    mechanism: |
+      Defines the broad US demand backdrop that flows through to Chinese
+      steel exports via durable goods imports. A miss (<1.5% annualised)
+      signals US slowdown; combined with hawkish Fed creates stagflation
+      narrative that weighs on global commodity demand including iron ore.
+      A beat (>2.5%) is supportive for China FOB.
+    expected_hrc_reaction: |
+      GDP miss + hawkish Fed combo: amplifies the iron ore weakness from
+      FOMC reaction; HRC China FOB pressured. Beat: stabilising for China
+      FOB.
+
+  - date: "2026-05-02"
+    name: "US Non-Farm Payrolls — April 2026"
+    country: USA
+    impact: HIGH
+    category: employment
+    consensus: "Headline payrolls + unemployment + average hourly earnings"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      The single biggest monthly mover of the dollar. Strong NFP (>200K +
+      stable unemployment + firm wage growth) → hawkish Fed pricing → DXY up
+      → iron ore down. Weak NFP → recession fears + dovish Fed pricing →
+      DXY down → iron ore up. The wage-growth component (average hourly
+      earnings) is critical: hot wages signal sticky inflation regardless
+      of headline. India sees the move via INR.
+    expected_hrc_reaction: |
+      Strong NFP combined with hot wages (>4% YoY): iron ore -2 to -5%
+      within 5 trading days. Weak NFP (<100K): iron ore +3 to +6%. Reaction
+      tends to "fakeout" first 15 minutes then reverse.
+
+  # ==========================================================================
+  # MAY 2026 — Post Mega-Week, FOMC Aftermath
+  # ==========================================================================
+
+  - date: "2026-05-05"
+    name: "US ISM Services PMI — April"
+    country: USA
+    impact: MED
+    category: manufacturing
+    consensus: "Services > 70% of US economy; sub-50 signals contraction"
+    affects_regions: [china]
+    primary_channel: us_demand_to_china_exports
+    mechanism: |
+      Services is the larger component of US GDP and a sustained sub-50 reading
+      signals broad economic contraction. Channel to HRC is indirect: services
+      slowdown → consumer spending pullback → durable goods demand → steel-
+      consuming sector weakness → reduced Chinese export pull. Released 3 days
+      after NFP, often confirms or contradicts the labour market signal.
+    expected_hrc_reaction: |
+      Sub-48 reading signals genuine recession risk — modest negative for
+      China FOB over 30-60 days ($5-10/t). Above 52 is reassuring, no
+      material HRC reaction.
+
+  - date: "2026-05-08"
+    name: "China Trade Balance — April 2026"
+    country: CHN
+    impact: MED
+    category: china_macro
+    consensus: "Surplus/deficit signals export demand absorption"
+    affects_regions: [china, india]
+    primary_channel: china_export_intent
+    mechanism: |
+      China's trade surplus is a real-time indicator of external demand
+      absorption. A widening surplus signals strong global willingness to
+      absorb Chinese exports — including steel exports. A narrowing surplus
+      signals export weakness, which in turn signals Chinese mills will
+      redirect output to domestic market, *increasing China FOB price
+      competition* and *raising risk of Chinese export dumping into India*.
+    expected_hrc_reaction: |
+      Surplus narrowing significantly → bearish for India HRC FBD via import
+      pressure (-INR 500-1500/t over 30 days). Surplus expanding → benign
+      for both regions; supports the "demand absorption" thesis.
+
+  - date: "2026-05-09"
+    name: "China CPI/PPI — April 2026"
+    country: CHN
+    impact: MED
+    category: inflation
+    consensus: "Domestic inflation; PPI especially relevant for industrial demand"
+    affects_regions: [china]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Chinese PPI is a direct indicator of industrial-sector pricing power.
+      Sustained PPI deflation (negative YoY) signals manufacturing margin
+      pressure and softening industrial demand — bearish for steel
+      consumption. Strengthening PPI suggests recovering pricing power
+      across upstream manufacturing, supportive of steel demand.
+    expected_hrc_reaction: |
+      PPI worsening (more deeply negative YoY) → reinforces bearish HRC
+      China FOB thesis if combined with weak IP. PPI improving → supportive.
+      Standalone reaction modest (1-2% iron ore over 1 week).
+
+  - date: "2026-05-12"
+    name: "US CPI — April 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "Sets June FOMC rate path expectation"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Post-Mega-Week CPI: the April print sets the trajectory for the June
+      16-17 FOMC. Hot CPI keeps Fed hawkish → DXY strength → iron ore
+      weakens. For China FOB: marginal raw-material cost relief, neutral-
+      to-positive for spread. For India: USD strength weakens INR → import
+      HCC INR cost rises → India spread compression risk.
+    expected_hrc_reaction: |
+      Hot surprise (>3.0% headline): iron ore -2 to -4% in 5 trading days,
+      HRC China FOB modestly weaker over 30 days, India spread compresses
+      INR 500-1000/t. Cool surprise (<2.6%): iron ore +2 to +5%, China
+      FOB firms, India spread benefits from INR strength.
+
+  - date: "2026-05-13"
+    name: "US PPI — April 2026"
+    country: USA
+    impact: MED
+    category: inflation
+    consensus: "Wholesale inflation; leads CPI by 1-2 months"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      PPI is upstream of CPI by 4-8 weeks. Sticky PPI signals CPI will stay
+      elevated, reinforcing the Fed-hawkish chain. Less market-moving than
+      CPI on the day of release, but a strong PPI surprise can shift the
+      next month's CPI expectation and pre-position iron ore.
+    expected_hrc_reaction: |
+      Material PPI surprise (>0.5% MoM beat) typically front-runs the next
+      CPI cycle's iron ore move. Stand-alone HRC reaction muted within
+      first 7 days.
+
+  - date: "2026-05-15"
+    name: "China Industrial Output / Retail Sales / FAI — April"
+    country: CHN
+    impact: HIGH
+    category: china_macro
+    consensus: "Headline IP YoY; retail sales YoY; fixed-asset investment YTD"
+    affects_regions: [china, india]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Industrial output (IP) is the most relevant Chinese data point for HRC
+      between GDP releases. IP directly tracks Chinese steel-consuming sector
+      activity (autos, machinery, shipbuilding, white goods, construction-
+      related industrial production). An IP miss triggers iron ore weakness
+      within 24 hours and HRC FOB pressure over the following 30 days. Fixed-
+      asset investment (FAI) captures the construction/infrastructure pulse
+      — direct steel consumption proxy.
+    expected_hrc_reaction: |
+      IP miss (<5.5% YoY): iron ore -3 to -5% within 5 trading days, HRC
+      China FOB -$10 to -$25/t over 30 days. IP beat (>6.5%): iron ore
+      +2 to +4%, HRC firms. FAI weakness signals deeper construction
+      slowdown — same direction as IP but slower-acting (60-90 day window).
+
+  - date: "2026-05-15"
+    name: "US Retail Sales — April 2026"
+    country: USA
+    impact: HIGH
+    category: consumer
+    consensus: "MoM change in headline & control group"
+    affects_regions: [china]
+    primary_channel: us_demand_to_china_exports
+    mechanism: |
+      US consumer demand is an indirect driver of Chinese steel exports
+      through the durable goods supply chain. Strong retail sales (especially
+      control group ex-autos/gas/building) → upstream demand for white goods,
+      autos, construction inputs — all of which raise the implied global
+      steel demand curve. Channel: US retail strength → Chinese export
+      orders firm → China HRC FOB supported.
+    expected_hrc_reaction: |
+      Strong control group (>+0.5% MoM) → mild positive for China FOB over
+      30-60 days. Recession-signal weak (<-0.3% MoM) → China FOB pressure
+      as export demand fears materialise.
+
+  - date: "2026-05-22"
+    name: "Eurozone Preliminary PMI — May"
+    country: EUR
+    impact: MED
+    category: manufacturing
+    consensus: "Manufacturing PMI vs 50 expansion line"
+    affects_regions: [china]
+    primary_channel: european_steel_demand
+    mechanism: |
+      European manufacturing PMI is a leading indicator for European steel
+      consumption, which historically absorbs 8-12% of Chinese steel exports.
+      A reading sustainably below 48 signals industrial recession, which
+      reduces seaborne steel demand and pressures Chinese export prices —
+      indirectly weighing on HRC China FOB. Indian channel is negligible.
+    expected_hrc_reaction: |
+      Manufacturing PMI <48 (recession territory) → modest China FOB
+      pressure ($5-15/t over 30 days). PMI >52 (expansion) → supportive.
+      The PMI new orders sub-component is the most forward-looking
+      element to track.
+
+  - date: "2026-05-29"
+    name: "US PCE Deflator — April 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "Core PCE MoM and YoY; Fed's preferred gauge"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      PCE is the Fed's preferred inflation measure. Released ~2.5 weeks
+      before June FOMC, it pre-positions the rate decision. Same DXY → iron
+      ore chain as CPI, but with greater market reaction because it directly
+      informs the FOMC decision and the timing is close to the meeting.
+    expected_hrc_reaction: |
+      Core PCE >0.3% MoM (hot): pre-positions hawkish Fed → DXY up → iron
+      ore weakness sustained through FOMC week. Cool PCE (<0.2% MoM):
+      iron ore rallies into FOMC. India INR moves significantly, ±INR
+      400/USD swings affecting import HCC cost.
+
+  # ==========================================================================
+  # JUNE 2026 — June FOMC Cluster
+  # ==========================================================================
+
+  - date: "2026-06-02"
+    name: "US ISM Manufacturing PMI — May"
+    country: USA
+    impact: HIGH
+    category: manufacturing
+    consensus: "Headline PMI vs 50 expansion line; New Orders sub-component leading"
+    affects_regions: [china, india]
+    primary_channel: us_demand_to_china_exports
+    mechanism: |
+      ISM Manufacturing PMI is the most-watched manufacturing indicator for
+      the world's largest economy. Drops in the headline PMI below 48 are
+      historically associated with both US and global manufacturing
+      recessions. The "New Orders" sub-component leads the headline by ~3
+      months and is the cleanest forward signal for steel demand. Direct
+      HRC channel via durable goods demand (autos, machinery, shipbuilding).
+    expected_hrc_reaction: |
+      Sub-48 reading + New Orders also <48: iron ore -2 to -4% over 10
+      trading days; HRC China FOB pressured -$10 to -$20/t. Above 52 is
+      growth-supportive — modest positive.
+
+  - date: "2026-06-06"
+    name: "US Non-Farm Payrolls — May 2026"
+    country: USA
+    impact: HIGH
+    category: employment
+    consensus: "Headline payrolls + unemployment + average hourly earnings"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Single biggest monthly mover of the dollar. Strong NFP (>200K + stable
+      unemployment + firm wage growth) → hawkish Fed pricing → DXY up →
+      iron ore down. Weak NFP → recession fears + dovish Fed pricing →
+      DXY down → iron ore up. The wage-growth component (average hourly
+      earnings) is critical: hot wages signal sticky inflation regardless
+      of headline. India sees the move via INR. This is the LAST major US
+      data point before June FOMC.
+    expected_hrc_reaction: |
+      Strong NFP combined with hot wages (>4% YoY): iron ore -2 to -5%
+      within 5 trading days. Weak NFP (<100K): iron ore +3 to +6%.
+      Reaction tends to "fakeout" first 15 minutes then reverse — the
+      reliable direction emerges 30-60 minutes post-release.
+
+  - date: "2026-06-09"
+    name: "China Trade Balance — May 2026"
+    country: CHN
+    impact: MED
+    category: china_macro
+    consensus: "May export/import data"
+    affects_regions: [china, india]
+    primary_channel: china_export_intent
+    mechanism: |
+      Same mechanism as April trade balance. Watch for: (1) overall surplus
+      direction, (2) steel exports specifically (often reported separately),
+      (3) iron ore imports (proxy for mill production intent). Steel export
+      surge → bearish for India FBD via import-parity pressure. Iron ore
+      import surge → supportive for iron ore prices and signals Chinese
+      mill restocking.
+    expected_hrc_reaction: |
+      Steel exports >9 Mt (high): bearish for India FBD over 30 days
+      (-INR 500-1500/t). Iron ore imports >100 Mt: bullish for iron ore +
+      neutral-to-bullish for HRC China FOB.
+
+  - date: "2026-06-10"
+    name: "China CPI/PPI — May 2026"
+    country: CHN
+    impact: MED
+    category: inflation
+    consensus: "Industrial pricing pulse confirmation"
+    affects_regions: [china]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Same mechanism as April CPI/PPI. PPI direction confirms or contradicts
+      the IP signal expected later in the week. PPI deflation persistence
+      indicates ongoing manufacturing margin pressure and softening
+      industrial demand.
+    expected_hrc_reaction: |
+      Standalone reaction modest (1-2% iron ore). Read in combination with
+      China IP release for clearer signal.
+
+  - date: "2026-06-11"
+    name: "US CPI — May 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "Released ~6 days before June FOMC; pivotal for SEP dot plot"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Pre-FOMC CPI release. Sets the immediate June 16-17 FOMC tone. Markets
+      will react sharply to deviation from consensus. Same DXY → iron ore
+      mechanism as standard CPI, but amplified because the Fed meeting is 5
+      days away and contains an updated dot plot. Hot CPI shifts the median
+      dot higher, removes 2026 cuts from pricing, and drives DXY 1-2% higher
+      in 48 hours. Iron ore typically follows with 24-hour lag.
+    expected_hrc_reaction: |
+      Hot CPI (>3.1% headline): iron ore -3 to -6% over 7 trading days, HRC
+      China FOB -$15 to -$30/t over 30 days; INR weakness pressures India
+      FBD spread by INR 800-1500/t. Cool surprise (<2.6%): iron ore +3 to
+      +6%; both regions benefit.
+
+  - date: "2026-06-11"
+    name: "ECB Rate Decision — June 2026"
+    country: EUR
+    impact: MED
+    category: central_bank
+    consensus: "Rates currently 2.00%; cuts vs hold debate"
+    affects_regions: [china]
+    primary_channel: european_steel_demand
+    mechanism: |
+      ECB policy stance affects the European industrial demand outlook
+      through financing conditions for construction and capex. Dovish ECB
+      (cut) → looser EU industrial activity → potentially stronger European
+      steel imports from China. Hawkish hold → tighter EU activity → weaker
+      Chinese exports to Europe. Channel is slower (months not weeks) and
+      less reliable than the FOMC → DXY → iron ore chain. Indian linkage
+      negligible.
+    expected_hrc_reaction: |
+      Direct HRC impact within 30 days is small (<1% China FOB). Worth
+      watching mainly for the cumulative European demand picture across
+      multiple ECB meetings.
+
+  - date: "2026-06-13"
+    name: "US PPI — May 2026"
+    country: USA
+    impact: MED
+    category: inflation
+    consensus: "Day before FOMC blackout starts"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Released the day before FOMC blackout begins. Less individually moving
+      than CPI but combined with the CPI release earlier in the week, paints
+      the inflation picture going into FOMC. PPI weakness combined with cool
+      CPI = clearly dovish setup; PPI hot + hot CPI = clearly hawkish setup.
+    expected_hrc_reaction: |
+      Confirming signal to CPI: amplifies the iron ore reaction to CPI.
+      Standalone HRC reaction within 5 days is muted (<1%).
+
+  - date: "2026-06-15"
+    name: "China Industrial Output / Retail Sales / FAI — May"
+    country: CHN
+    impact: HIGH
+    category: china_macro
+    consensus: "Single biggest China data point of the month"
+    affects_regions: [china, india]
+    primary_channel: china_demand_direct
+    mechanism: |
+      Industrial output (IP) is the most relevant Chinese data point for HRC.
+      Released the day before June FOMC — combined with the FOMC and the day
+      after, this creates a 48-hour window of cross-currents that typically
+      produces the largest weekly moves in iron ore. IP miss triggers iron
+      ore weakness within 24 hours and HRC FOB pressure over the following
+      30 days. FAI captures construction/infrastructure pulse — direct steel
+      consumption proxy.
+    expected_hrc_reaction: |
+      IP miss (<5.5% YoY): iron ore -3 to -5% within 5 trading days, HRC
+      China FOB -$10 to -$25/t over 30 days. IP beat (>6.5%): iron ore
+      +2 to +4%, HRC firms. The compounding effect with FOMC the next day
+      means total iron ore moves over 48 hours can reach 5-8%.
+
+  - date: "2026-06-17"
+    name: "FOMC Decision — June 2026 (with SEP/Dot Plot)"
+    country: USA
+    impact: HIGH
+    category: central_bank
+    consensus: "Hold expected at 3.50-3.75%; SEP dot plot critical"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Single most market-moving event of the 45-day window. The June meeting
+      includes an updated Summary of Economic Projections (SEP) with the
+      "dot plot" — median expected year-end rate, which markets reprice
+      aggressively if it shifts from prior. Three things to watch: (1) the
+      rate decision itself (mostly pre-priced as a hold), (2) the dot plot
+      shift vs March SEP (median dot for 2026), (3) Powell's press
+      conference. Hawkish hold (dots shift higher, removes cuts from 2026)
+      → DXY rallies → iron ore weakens. Dovish hold (dots shift lower,
+      adds cuts) → DXY weakens → iron ore + commodities rally. Press
+      conference often moves more than the decision itself.
+    expected_hrc_reaction: |
+      Hawkish surprise: iron ore -3 to -7% over 5 trading days; HRC China
+      FOB -$15 to -$40/t over 30 days; INR weakness pressures India FBD
+      spread INR 1000-2000/t. Dovish surprise: iron ore +5 to +8%; HRC
+      China FOB firms; India spread benefits from INR rally.
+
+  # ==========================================================================
+  # LATE JUNE 2026 — Buffer for next refresh cycle
+  # ==========================================================================
+
+  - date: "2026-06-26"
+    name: "US PCE Deflator — May 2026"
+    country: USA
+    impact: HIGH
+    category: inflation
+    consensus: "Post-FOMC PCE; sets next-meeting bias"
+    affects_regions: [china, india]
+    primary_channel: dxy_to_iron_ore
+    mechanism: |
+      Post-FOMC PCE confirms or contradicts the dot-plot trajectory just
+      announced. If PCE comes hotter than the SEP forecast, markets will
+      reprice further hawkish; if cooler, dovish bets re-emerge. This is
+      the highest-frequency feedback loop on Fed policy. Same DXY → iron
+      ore mechanism.
+    expected_hrc_reaction: |
+      Same mechanism as April/May PCE. Magnitude often larger if it diverges
+      sharply from the just-released SEP forecast — that creates an immediate
+      "Fed is wrong" narrative that drives DXY harder.
