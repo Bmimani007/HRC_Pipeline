@@ -171,6 +171,47 @@ def cached_macro_calendar(_dataset, config_yaml: str, window_days: int,
                                     show_past=show_past, past_days=past_days)
 
 
+# ---------- FORECASTING caches ----------
+@st.cache_data(show_spinner="Fitting ARIMAX...")
+def cached_arimax(_region, region_key: str, ar: int, d: int, ma: int,
+                    horizon: int, drivers_tuple: tuple, file_mtime: float):
+    """Cache key includes region_key + all params + drivers tuple + file mtime."""
+    from pipeline.forecasting import fit_arimax
+    drivers = list(drivers_tuple) if drivers_tuple else None
+    return fit_arimax(_region.y, _region.X, ar=ar, d=d, ma=ma,
+                        horizon=horizon, drivers=drivers)
+
+
+@st.cache_data(show_spinner="Fitting ARDL...")
+def cached_ardl(_region, region_key: str, ar: int, dl: int,
+                  horizon: int, drivers_tuple: tuple, file_mtime: float):
+    from pipeline.forecasting import fit_ardl
+    drivers = list(drivers_tuple) if drivers_tuple else None
+    return fit_ardl(_region.y, _region.X, ar=ar, dl=dl,
+                     horizon=horizon, drivers=drivers)
+
+
+@st.cache_data(show_spinner="Running walk-forward backtest (30-90s)...")
+def cached_backtest(_region, region_key: str, model_type: str,
+                       ar: int, d: int, ma: int, dl: int,
+                       horizon: int, drivers_tuple: tuple,
+                       min_train: int, step: int, file_mtime: float):
+    from pipeline.forecasting import walk_forward_backtest
+    drivers = list(drivers_tuple) if drivers_tuple else None
+    return walk_forward_backtest(_region.y, _region.X, model_type=model_type,
+                                    ar=ar, d=d, ma=ma, dl=dl,
+                                    drivers=drivers,
+                                    forecast_horizon=horizon,
+                                    min_train_months=min_train,
+                                    step_months=step)
+
+
+@st.cache_data(show_spinner="Fitting GARCH + risk metrics...")
+def cached_garch(_region, region_key: str, horizon: int, file_mtime: float):
+    from pipeline.forecasting import fit_garch_with_risk
+    return fit_garch_with_risk(_region.y, horizon=horizon)
+
+
 # ---------- Color palette ----------
 COLORS = {"accent": "#1F4E79", "accent2": "#2D6A4F", "warning": "#C9540F",
           "danger": "#A4161A", "ink": "#1A1F2E", "muted": "#5C6B7F",
@@ -414,8 +455,8 @@ filter_key = (
 
 
 # ---------- TABS ----------
-tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_macro = st.tabs([
-    "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Macro Calendar"
+tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro = st.tabs([
+    "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar"
 ])
 
 
@@ -719,6 +760,468 @@ with tab_attribution:
                                hovermode="x unified")
             style_axes(fig)
             st.plotly_chart(fig, use_container_width=True)
+
+
+# ===== FORECASTS — Model Laboratory + Backtest + GARCH =====
+with tab_forecast:
+    st.markdown("### Forecast Laboratory")
+    st.caption(
+        "Configure ARIMAX/ARDL parameters and inspect forecasts, walk-forward backtests, "
+        "and GARCH volatility/risk metrics. All operations are cached — first run "
+        "takes 5-30 seconds, subsequent views are instant."
+    )
+
+    # Reset button
+    rc1, rc2 = st.columns([1, 5])
+    with rc1:
+        if st.button("Reset to defaults", help="Clear forecasting cache and reset all controls"):
+            keys_to_clear = [k for k in st.session_state.keys() if k.startswith("fc_")]
+            for k in keys_to_clear:
+                del st.session_state[k]
+            st.rerun()
+
+    # ===== SECTION A: Model Laboratory =====
+    st.markdown("---")
+    st.markdown("#### Section A · Model Laboratory")
+    st.caption("Fit ARIMAX or ARDL with full parameter control. Compare models side-by-side.")
+
+    # Controls row 1: model selection + horizon
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        model_choice = st.radio(
+            "Model", ["ARIMAX", "ARDL", "Both (compare)"],
+            horizontal=True, key="fc_model_choice",
+            help="ARIMAX: AutoRegressive Integrated Moving Average with eXogenous drivers. "
+                 "ARDL: AutoRegressive Distributed Lag — uses lags of drivers. "
+                 "Both: fit and compare side-by-side."
+        )
+    with col2:
+        forecast_horizon = st.slider(
+            "Forecast horizon (months)", 3, 24, 12, step=3, key="fc_horizon",
+            help="How many months forward to forecast."
+        )
+    with col3:
+        # Info display only — region from main selector
+        st.metric("Region", region_pick.title(),
+                   f"{region.n_obs} obs · {len(region.drivers)} drivers")
+
+    # Controls row 2: ARIMAX/ARDL orders
+    if model_choice in ("ARIMAX", "Both (compare)"):
+        st.markdown("**ARIMAX parameters**")
+        ac1, ac2, ac3 = st.columns(3)
+        with ac1:
+            ar_arx = st.slider("AR order (p)", 0, 4, 2, key="fc_ar_arx",
+                                 help="AutoRegressive order: number of lagged HRC values used.")
+        with ac2:
+            d_arx = st.slider("Differencing (d)", 0, 2, 1, key="fc_d_arx",
+                                help="Differencing order: 0 = levels, 1 = first difference (typical), 2 = second difference.")
+        with ac3:
+            ma_arx = st.slider("MA order (q)", 0, 4, 1, key="fc_ma_arx",
+                                 help="Moving Average order: number of lagged residuals used.")
+    else:
+        ar_arx, d_arx, ma_arx = 2, 1, 1
+
+    if model_choice in ("ARDL", "Both (compare)"):
+        st.markdown("**ARDL parameters**")
+        bc1, bc2, _ = st.columns(3)
+        with bc1:
+            ar_ardl = st.slider("AR order (lags of HRC)", 0, 4, 2, key="fc_ar_ardl",
+                                  help="Number of lagged HRC values used in ARDL.")
+        with bc2:
+            dl_ardl = st.slider("DL order (lags of drivers)", 0, 4, 2, key="fc_dl_ardl",
+                                  help="Number of lagged driver values used in ARDL.")
+    else:
+        ar_ardl, dl_ardl = 2, 2
+
+    # Driver selection
+    all_drivers = list(region.drivers)
+    selected_drivers = st.multiselect(
+        "Drivers to include in model",
+        options=all_drivers,
+        default=all_drivers,
+        key="fc_drivers",
+        help="Uncheck a driver to fit the model without it. Useful for testing each driver's contribution."
+    )
+
+    if len(selected_drivers) == 0:
+        st.warning("Select at least one driver to fit the model.")
+        st.stop()
+
+    # Fit + display the chosen model(s)
+    drivers_tuple = tuple(sorted(selected_drivers))
+
+    def _render_fit(fit_result, label, color):
+        """Render one model fit's outputs."""
+        if not fit_result.success:
+            st.error(f"❌ **{label} failed**: {fit_result.error_msg}")
+            st.caption(f"Configuration: {fit_result.config_summary}")
+            return
+
+        st.success(f"✓ **{label}** — {fit_result.config_summary}")
+
+        # Metrics row
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("RMSE", f"{currency} {fit_result.rmse:,.0f}/t")
+        m2.metric("MAPE", f"{fit_result.mape:.2f}%")
+        m3.metric("R²", f"{fit_result.r2:.3f}")
+        m4.metric("AIC", f"{fit_result.aic:.0f}")
+        m5.metric("BIC", f"{fit_result.bic:.0f}")
+
+        # Ljung-Box residual diagnostic
+        if fit_result.ljung_box_p is not None:
+            lb_status = "✓ no autocorrelation" if fit_result.ljung_box_p > 0.05 else "⚠ residual autocorrelation present"
+            st.caption(f"Ljung-Box test (10 lags): p = {fit_result.ljung_box_p:.3f} → {lb_status}")
+
+        # Forecast chart
+        target = region.y
+        fig = go.Figure()
+        # In-sample fit
+        fig.add_trace(go.Scatter(
+            x=target.index, y=target.values, mode="lines",
+            line=dict(color=COLORS["ink"], width=1.5),
+            name="Actual"
+        ))
+        if fit_result.fitted_in_sample is not None:
+            fig.add_trace(go.Scatter(
+                x=fit_result.fitted_in_sample.index,
+                y=fit_result.fitted_in_sample.values,
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dot"),
+                name="In-sample fit"
+            ))
+        # Forecast + 95% CI
+        if fit_result.forecast_mean is not None:
+            fig.add_trace(go.Scatter(
+                x=fit_result.forecast_upper_95.index,
+                y=fit_result.forecast_upper_95.values,
+                mode="lines", line=dict(width=0), showlegend=False,
+                hoverinfo="skip"
+            ))
+            fig.add_trace(go.Scatter(
+                x=fit_result.forecast_lower_95.index,
+                y=fit_result.forecast_lower_95.values,
+                mode="lines", line=dict(width=0),
+                fill="tonexty",
+                fillcolor=f"rgba{tuple(list(_hex_to_rgb(color)) + [0.2])}",
+                name="95% CI"
+            ))
+            fig.add_trace(go.Scatter(
+                x=fit_result.forecast_mean.index,
+                y=fit_result.forecast_mean.values,
+                mode="lines",
+                line=dict(color=color, width=2.5),
+                name=f"Forecast ({forecast_horizon}m)"
+            ))
+        fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
+                            yaxis_title=f"{currency}/t",
+                            title=dict(text=f"{label} forecast", font=dict(size=13)))
+        style_axes(fig)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Coefficient table
+        with st.expander("Coefficient table"):
+            if fit_result.coefficients is not None:
+                cdf = fit_result.coefficients.copy()
+                cdf["coef"] = cdf["coef"].round(4)
+                cdf["std_err"] = cdf["std_err"].round(4)
+                cdf["p_value"] = cdf["p_value"].round(4)
+                cdf["sig"] = cdf["p_value"].apply(
+                    lambda p: "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
+                )
+                st.dataframe(cdf, use_container_width=True, hide_index=True)
+                st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001")
+
+    # Helper for color blending
+    def _hex_to_rgb(hex_color):
+        h = hex_color.lstrip("#")
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+    if model_choice == "ARIMAX":
+        fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
+                                  forecast_horizon, drivers_tuple, file_mtime)
+        _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
+    elif model_choice == "ARDL":
+        fit_ardl = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
+                                 forecast_horizon, drivers_tuple, file_mtime)
+        _render_fit(fit_ardl, "ARDL", COLORS["accent2"])
+    else:  # Both (compare)
+        fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
+                                  forecast_horizon, drivers_tuple, file_mtime)
+        fit_ardl_r = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
+                                   forecast_horizon, drivers_tuple, file_mtime)
+
+        # Two-column comparison
+        st.markdown("##### Side-by-side comparison")
+        comp_data = []
+        for fit_res, name in [(fit_arx, "ARIMAX"), (fit_ardl_r, "ARDL")]:
+            if fit_res.success:
+                comp_data.append({
+                    "Model": name,
+                    "RMSE": f"{fit_res.rmse:,.0f}",
+                    "MAPE %": f"{fit_res.mape:.2f}",
+                    "R²": f"{fit_res.r2:.3f}",
+                    "AIC": f"{fit_res.aic:.0f}",
+                    "BIC": f"{fit_res.bic:.0f}",
+                    "Status": "✓",
+                })
+            else:
+                comp_data.append({
+                    "Model": name, "RMSE": "—", "MAPE %": "—", "R²": "—",
+                    "AIC": "—", "BIC": "—", "Status": "❌",
+                })
+        st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+
+        # Render each in collapsible expanders to keep things tidy
+        with st.expander("ARIMAX details", expanded=True):
+            _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
+        with st.expander("ARDL details"):
+            _render_fit(fit_ardl_r, "ARDL", COLORS["accent2"])
+
+
+    # ===== SECTION B: Walk-Forward Backtest =====
+    st.markdown("---")
+    st.markdown("#### Section B · Walk-Forward Backtest")
+    st.caption(
+        "Re-train the model month-by-month going back N years, each time forecasting H months ahead. "
+        "Compare these rolling forecasts to actual prices to measure honest out-of-sample performance."
+    )
+
+    bt_c1, bt_c2, bt_c3, bt_c4 = st.columns(4)
+    with bt_c1:
+        bt_model = st.selectbox("Model", ["ARIMAX", "ARDL"], key="fc_bt_model")
+    with bt_c2:
+        bt_horizon = st.slider("Forecast horizon", 1, 12, 6, key="fc_bt_horizon",
+                                  help="Each fold forecasts this many months ahead.")
+    with bt_c3:
+        max_train = max(60, region.n_obs - bt_horizon - 12)
+        bt_min_train = st.slider("Min training months", 36, max_train,
+                                    min(60, max_train), step=12,
+                                    key="fc_bt_min_train",
+                                    help="Earliest training window starts here.")
+    with bt_c4:
+        bt_step = st.slider("Step (months)", 1, 6, 3, key="fc_bt_step",
+                              help="Move the origin forward by this many months between folds.")
+
+    if st.button("Run walk-forward backtest", key="fc_bt_run",
+                   help="Click to run the backtest. Takes 30-90 seconds first time, instant on cache hit."):
+        bt = cached_backtest(region, region_pick, bt_model.lower(),
+                                ar_arx, d_arx, ma_arx, dl_ardl,
+                                bt_horizon, drivers_tuple,
+                                bt_min_train, bt_step, file_mtime)
+        st.session_state["fc_bt_result"] = bt
+
+    if "fc_bt_result" in st.session_state:
+        bt = st.session_state["fc_bt_result"]
+        if not bt.success:
+            st.error(f"Backtest failed: {bt.error_msg}")
+        else:
+            # Top-line metrics
+            tm1, tm2, tm3, tm4 = st.columns(4)
+            tm1.metric("Folds completed", bt.n_folds)
+            tm2.metric("Out-of-sample RMSE", f"{currency} {bt.overall_rmse:,.0f}/t")
+            tm3.metric("Out-of-sample MAPE", f"{bt.overall_mape:.2f}%")
+            tm4.metric("Hit rate (direction)", f"{bt.overall_hit_rate:.0f}%",
+                         help="% of forecasts that correctly predicted up vs down direction.")
+
+            # Honest assessment callout
+            st.info(
+                f"**Honest assessment:** Over {bt.n_folds} historical retraining folds, this model's "
+                f"forecasts were on average **±{bt.overall_mape:.1f}%** away from actual prices "
+                f"in out-of-sample tests. It correctly predicted direction "
+                f"**{bt.overall_hit_rate:.0f}%** of the time. "
+                f"{'A hit rate well above 50% indicates genuine forecast skill.' if bt.overall_hit_rate > 60 else 'A hit rate near 50% suggests forecasts are no better than coin-flip on direction.'}"
+            )
+
+            # Metrics by horizon
+            st.markdown("##### Performance degradation by horizon")
+            st.dataframe(bt.metrics_by_horizon, use_container_width=True, hide_index=True)
+            st.caption("Forecast accuracy typically degrades at longer horizons. RMSE/MAPE rising with h is expected.")
+
+            # Rolling forecast vs actual chart
+            st.markdown("##### Rolling forecasts vs actual")
+            fig = go.Figure()
+            target = region.y
+            fig.add_trace(go.Scatter(
+                x=target.index, y=target.values, mode="lines",
+                line=dict(color=COLORS["ink"], width=1.5), name="Actual"
+            ))
+            # Plot forecasts at horizon = bt_horizon (terminal forecasts only for clarity)
+            terminal = bt.fold_results[bt.fold_results["h_months"] == bt_horizon]
+            fig.add_trace(go.Scatter(
+                x=terminal["target_date"], y=terminal["forecast"],
+                mode="markers",
+                marker=dict(color=COLORS["accent"], size=6, opacity=0.7,
+                              symbol="diamond"),
+                name=f"{bt_horizon}m-ahead forecast (each origin)",
+            ))
+            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
+                                yaxis_title=f"{currency}/t",
+                                hovermode="x unified")
+            style_axes(fig)
+            st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander("All fold results"):
+                st.dataframe(bt.fold_results.round(2), use_container_width=True,
+                              hide_index=True)
+
+
+    # ===== SECTION C: GARCH Volatility + Risk =====
+    st.markdown("---")
+    st.markdown("#### Section C · GARCH Volatility & Risk Metrics")
+    st.caption(
+        "GARCH(1,1) model fitted on log-returns. Provides conditional volatility forecast, "
+        "fan chart on point forecast, VaR/Expected Shortfall, and current volatility regime classification."
+    )
+
+    g = cached_garch(region, region_pick, forecast_horizon, file_mtime)
+
+    if not g.success:
+        st.error(f"GARCH fit failed: {g.error_msg}")
+    else:
+        # Top-line GARCH metrics
+        gm1, gm2, gm3, gm4 = st.columns(4)
+        gm1.metric("Persistence (α+β)", f"{g.persistence:.3f}",
+                     help="Higher = volatility shocks decay slowly. Values near 1 indicate near-permanent shocks.")
+        gm2.metric("Half-life", f"{g.half_life_months:.1f}m" if g.half_life_months and not np.isinf(g.half_life_months) else "∞",
+                     help="Months until a vol shock decays to half its initial size.")
+        gm3.metric("Current vol percentile", f"P{g.vol_percentile:.0f}")
+        regime_emoji = {"low": "🟢", "normal": "⚪", "elevated": "🟠", "extreme": "🔴"}.get(g.regime_label, "⚪")
+        gm4.metric("Volatility regime", f"{regime_emoji} {g.regime_label.upper()}")
+
+        # ----- View 1: Fan chart -----
+        st.markdown("##### View 1 — Volatility fan chart")
+        st.caption("Forecast price (using ARIMAX point forecast as centre) with GARCH-derived uncertainty bands.")
+
+        # Use ARIMAX forecast as centre (already cached)
+        try:
+            arx_for_fan = cached_arimax(region, region_pick, ar_arx, d_arx, ma_arx,
+                                          forecast_horizon, drivers_tuple, file_mtime)
+        except Exception:
+            arx_for_fan = None
+
+        if arx_for_fan and arx_for_fan.success and arx_for_fan.forecast_mean is not None:
+            target = region.y
+            point_fc = arx_for_fan.forecast_mean
+
+            # Build fan: 1, 2, 3 sigma bands using GARCH forecast vol
+            fan_fig = go.Figure()
+            fan_fig.add_trace(go.Scatter(
+                x=target.index[-36:], y=target.values[-36:],
+                mode="lines",
+                line=dict(color=COLORS["ink"], width=1.5),
+                name="Actual"
+            ))
+            # Compute fan bands
+            for k_sigma, alpha_fill in [(3, 0.10), (2, 0.18), (1, 0.30)]:
+                # cumulative vol grows with sqrt(h) — multiply by sqrt(h)
+                horizon_steps = np.arange(1, len(point_fc) + 1)
+                vol_h = g.forecast_vol.values[: len(point_fc)] / 100.0  # to decimal
+                # The vol forecast is for log-returns; scale to price space
+                last_price = float(target.iloc[-1])
+                band_pct = k_sigma * vol_h * np.sqrt(horizon_steps)
+                upper = point_fc.values * np.exp(band_pct)
+                lower = point_fc.values * np.exp(-band_pct)
+                fan_fig.add_trace(go.Scatter(
+                    x=point_fc.index, y=upper,
+                    mode="lines", line=dict(width=0), showlegend=False,
+                    hoverinfo="skip"
+                ))
+                fan_fig.add_trace(go.Scatter(
+                    x=point_fc.index, y=lower,
+                    mode="lines", line=dict(width=0),
+                    fill="tonexty",
+                    fillcolor=f"rgba(31, 78, 121, {alpha_fill})",
+                    name=f"±{k_sigma}σ band",
+                ))
+            fan_fig.add_trace(go.Scatter(
+                x=point_fc.index, y=point_fc.values,
+                mode="lines",
+                line=dict(color=COLORS["accent"], width=2.5),
+                name="Point forecast"
+            ))
+            fan_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                                    yaxis_title=f"{currency}/t",
+                                    title=dict(text="Forecast with GARCH-derived uncertainty bands",
+                                                 font=dict(size=13)))
+            style_axes(fan_fig)
+            st.plotly_chart(fan_fig, use_container_width=True)
+            st.caption(
+                "Fan widths: 1σ (~68% probability), 2σ (~95%), 3σ (~99.7%). "
+                "Bands grow with horizon because cumulative uncertainty compounds with √h."
+            )
+        else:
+            st.warning("ARIMAX forecast required for fan chart but failed — try simpler ARIMAX parameters.")
+
+        # ----- View 2: Risk metrics -----
+        st.markdown("##### View 2 — Risk metrics (1-month forward)")
+        rm1, rm2, rm3, rm4 = st.columns(4)
+        rm1.metric("VaR 95%", f"{currency} {g.var_95:,.0f}/t",
+                     help="5% probability of losing MORE than this in 1 month.")
+        rm2.metric("VaR 99%", f"{currency} {g.var_99:,.0f}/t",
+                     help="1% probability of losing MORE than this in 1 month.")
+        rm3.metric("Expected Shortfall 95%", f"{currency} {g.expected_shortfall_95:,.0f}/t",
+                     help="Average loss IF the 5% tail event occurs.")
+        rm4.metric("Expected Shortfall 99%", f"{currency} {g.expected_shortfall_99:,.0f}/t",
+                     help="Average loss IF the 1% tail event occurs.")
+        st.caption(
+            "VaR (Value-at-Risk) and ES (Expected Shortfall) are computed from the GARCH-forecast "
+            "volatility under a normal distribution assumption. ES is generally more honest than "
+            "VaR because it captures the magnitude of tail losses, not just their threshold."
+        )
+
+        # ----- View 3: Volatility regime -----
+        st.markdown("##### View 3 — Volatility regime indicator")
+
+        # Build a visualization showing current vol vs full historical distribution
+        vol_history = g.conditional_vol
+        vol_levels = sorted(vol_history.values)
+        n = len(vol_levels)
+
+        # Plot histogram + current marker
+        rg_fig = go.Figure()
+        rg_fig.add_trace(go.Histogram(
+            x=vol_history.values,
+            nbinsx=40,
+            marker_color=COLORS["muted"],
+            opacity=0.7,
+            name="Historical vol"
+        ))
+        rg_fig.add_vline(
+            x=g.current_vol,
+            line=dict(color=COLORS["danger"], width=3, dash="dash"),
+            annotation_text=f"Current: P{g.vol_percentile:.0f}",
+            annotation_position="top",
+        )
+        # Regime band shading
+        p25 = float(np.percentile(vol_history.values, 25))
+        p65 = float(np.percentile(vol_history.values, 65))
+        p90 = float(np.percentile(vol_history.values, 90))
+        rg_fig.add_vrect(x0=0, x1=p25, fillcolor="green", opacity=0.05, line_width=0,
+                            annotation_text="LOW", annotation_position="top left")
+        rg_fig.add_vrect(x0=p25, x1=p65, fillcolor="grey", opacity=0.05, line_width=0,
+                            annotation_text="NORMAL", annotation_position="top left")
+        rg_fig.add_vrect(x0=p65, x1=p90, fillcolor="orange", opacity=0.10, line_width=0,
+                            annotation_text="ELEVATED", annotation_position="top left")
+        rg_fig.add_vrect(x0=p90, x1=max(vol_history.values) * 1.05,
+                            fillcolor="red", opacity=0.15, line_width=0,
+                            annotation_text="EXTREME", annotation_position="top left")
+        rg_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=350,
+                                xaxis_title="Conditional volatility (% / period)",
+                                yaxis_title="Frequency",
+                                showlegend=False,
+                                title=dict(text="Current volatility regime in historical context",
+                                             font=dict(size=13)))
+        style_axes(rg_fig)
+        st.plotly_chart(rg_fig, use_container_width=True)
+
+        regime_msg = {
+            "low": "Volatility is unusually subdued. Risk models calibrated here will materially under-estimate stress-period tail risk.",
+            "normal": "Volatility is in its typical operating range. Standard risk parameters apply.",
+            "elevated": "Volatility is elevated above norms. Position-sizing should be reduced; expect larger price swings.",
+            "extreme": "Volatility is in the top decile of historical experience. This is a stress regime — exercise maximum caution on directional positions."
+        }.get(g.regime_label, "")
+        if regime_msg:
+            st.info(f"**Regime interpretation:** {regime_msg}")
 
 
 # ===== MACRO CALENDAR =====
