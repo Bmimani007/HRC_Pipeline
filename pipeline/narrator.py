@@ -1042,3 +1042,388 @@ def narrate_macro_calendar(calendar_result) -> List:
     for ev in calendar_result.events:
         out.append(narrate_event(ev))
     return out
+
+
+# ---------- REGIMES (K-means) narration ----------
+
+def narrate_regimes(regime_result, currency: str = "USD") -> List:
+    """Prose for the regime classification section (K-means based)."""
+    if regime_result is None:
+        return ["<i>Regime classification unavailable.</i>"]
+
+    out = []
+    n_reg = regime_result.n_regimes
+    cur_r = regime_result.current_regime
+
+    # Para 1: methodology
+    p1 = (
+        f"This section identifies <b>{n_reg} market regimes</b> using K-means "
+        f"clustering on the joint distribution of HRC and its drivers. Unlike the "
+        f"GMM approach in the Cyclicity tab, K-means assigns each month to exactly "
+        f"one regime based on its position in feature space. The market is currently "
+        f"in <b>regime {cur_r}</b>."
+    )
+    out.append(p1)
+
+    # Per-regime stats summary
+    if hasattr(regime_result, "regime_stats") and regime_result.regime_stats is not None:
+        try:
+            stats_df = regime_result.regime_stats
+            current_row = stats_df[stats_df.iloc[:, 0] == cur_r] if len(stats_df) > 0 else None
+            cur_n = int(current_row.iloc[0].get("n_months", 0)) if current_row is not None and len(current_row) > 0 else 0
+            total_months = int(stats_df["n_months"].sum()) if "n_months" in stats_df.columns else 0
+            if cur_n > 0 and total_months > 0:
+                pct_in_cur = cur_n / total_months * 100
+                p2 = (
+                    f"Of {total_months} historical months, <b>{cur_n}</b> "
+                    f"({pct_in_cur:.0f}%) have fallen in the current regime — "
+                    f"this is a {'common' if pct_in_cur > 25 else 'rarer'} state for the market."
+                )
+                out.append(p2)
+        except Exception:
+            pass
+
+    out.append(_key_box(
+        "Key Interpretation",
+        f"Market currently classified in <b>regime {cur_r}</b> of {n_reg}. "
+        f"K-means provides a hard classification useful for filtering historical "
+        f"comparable periods. For richer dynamics (transition probabilities, "
+        f"cycle frequencies), see the Cyclicity tab."
+    ))
+    return out
+
+
+# ---------- FORECAST: ARIMAX / ARDL fit narration ----------
+
+def narrate_model_fit(fit_result, model_label: str, drivers_used: List[str],
+                       currency: str = "USD") -> List:
+    """Prose for one fitted forecasting model — ARIMAX or ARDL."""
+    if fit_result is None or not fit_result.success:
+        msg = fit_result.error_msg if fit_result else "no result"
+        return [
+            f"<i>{model_label} could not be fitted: {msg}.</i>",
+            f"<i>Try simpler parameter orders or fewer drivers.</i>",
+        ]
+
+    out = []
+    rmse = fit_result.rmse; mape = fit_result.mape; r2 = fit_result.r2
+    aic = fit_result.aic; bic = fit_result.bic
+    h_periods = len(fit_result.forecast_mean) if fit_result.forecast_mean is not None else 0
+
+    # Para 1: configuration + headline fit
+    fit_quality = ("excellent" if (mape and mape < 5) else
+                    "good" if (mape and mape < 10) else
+                    "moderate" if (mape and mape < 20) else
+                    "weak")
+    p1 = (
+        f"<b>{model_label}</b> fitted with configuration: "
+        f"<code>{fit_result.config_summary}</code>. The model achieves an "
+        f"in-sample MAPE of <b>{fmt_pct(mape, decimals=2)}</b> against the actual "
+        f"price series, with RMSE of <b>{fmt_money(rmse, currency)}</b> and "
+        f"R² = <b>{fmt_num(r2, 3)}</b>. This represents <b>{fit_quality}</b> in-sample fit. "
+        f"The model produces a forecast extending <b>{h_periods} months</b> beyond "
+        f"the last observation."
+    )
+    out.append(p1)
+
+    # Para 2: information criteria interpretation
+    p2 = (
+        f"Information criteria — AIC = <b>{fmt_num(aic, 0)}</b>, "
+        f"BIC = <b>{fmt_num(bic, 0)}</b> — penalize model complexity to discourage "
+        f"overfitting. Lower values indicate better trade-off between fit quality "
+        f"and parameter parsimony. To compare alternative parameter combinations, "
+        f"watch how AIC/BIC change as you adjust the order sliders: a meaningfully "
+        f"lower AIC (≥10 units) for a more complex model justifies the added "
+        f"parameters; smaller improvements likely reflect overfitting."
+    )
+    out.append(p2)
+
+    # Para 3: residual diagnostics
+    if fit_result.ljung_box_p is not None:
+        if fit_result.ljung_box_p > 0.05:
+            p3 = (
+                f"<b>Residual diagnostics</b> — the Ljung-Box test on residuals "
+                f"yields p = {fit_result.ljung_box_p:.3f}, comfortably above the 0.05 "
+                f"threshold. This indicates <b>no significant autocorrelation</b> "
+                f"left in the residuals — the model has captured the systematic "
+                f"structure in the series. The residuals look like noise, which is "
+                f"the desired property."
+            )
+        else:
+            p3 = (
+                f"<b>Residual diagnostics warning</b> — the Ljung-Box test on "
+                f"residuals yields p = {fit_result.ljung_box_p:.3f}, which is below "
+                f"the 0.05 threshold. This indicates <b>significant autocorrelation "
+                f"remains</b> in the residuals — the model has missed some systematic "
+                f"structure in the series. Consider increasing AR order or adding "
+                f"more lags via DL/MA terms."
+            )
+        out.append(p3)
+
+    # Para 4: significant coefficients
+    if fit_result.coefficients is not None and len(fit_result.coefficients) > 0:
+        try:
+            sig = fit_result.coefficients[fit_result.coefficients["p_value"] < 0.05]
+            if len(sig) > 0:
+                top_sig = sig.sort_values("p_value").head(5)
+                names = ", ".join(
+                    f"<b>{r['param']}</b> (β={r['coef']:+.3f}, p={r['p_value']:.3f})"
+                    for _, r in top_sig.iterrows()
+                )
+                p4 = (
+                    f"<b>Statistically significant drivers</b> (p < 0.05): "
+                    f"{len(sig)} of {len(fit_result.coefficients)} parameters reach "
+                    f"conventional significance. Top contributors: {names}. "
+                    f"Drivers without significance contribute noise and could be "
+                    f"removed to simplify the model — try unchecking them in the "
+                    f"driver multiselect to see the impact."
+                )
+                out.append(p4)
+            else:
+                out.append(
+                    f"<b>No drivers reach statistical significance</b> at p < 0.05 "
+                    f"with this configuration. The forecast is being driven primarily "
+                    f"by the AR/MA terms (HRC's own past). This may indicate the "
+                    f"current driver set lacks short-run predictive content for HRC, "
+                    f"or that the model orders need adjustment."
+                )
+        except Exception:
+            pass
+
+    # Key interpretation box
+    forecast_first = float(fit_result.forecast_mean.iloc[0]) if fit_result.forecast_mean is not None else None
+    forecast_last = float(fit_result.forecast_mean.iloc[-1]) if fit_result.forecast_mean is not None else None
+    if forecast_first and forecast_last:
+        change_pct = (forecast_last - forecast_first) / forecast_first * 100
+        direction = ("rising" if change_pct > 2 else
+                      "falling" if change_pct < -2 else
+                      "approximately flat")
+        msg = (
+            f"<b>{model_label}</b> achieves <b>{fit_quality}</b> in-sample fit "
+            f"(MAPE {fmt_pct(mape, decimals=2)}, R² {fmt_num(r2, 3)}). "
+            f"Forecast trajectory over the next {h_periods} months is "
+            f"<b>{direction}</b>: starts at {fmt_money(forecast_first, currency)}, "
+            f"ends at {fmt_money(forecast_last, currency)} "
+            f"({fmt_pct(change_pct, with_sign=True)}). "
+            f"Read the 95% confidence band carefully — its width reflects estimation "
+            f"uncertainty, but does NOT account for unmodeled regime shifts."
+        )
+    else:
+        msg = (
+            f"<b>{model_label}</b> fits the in-sample data with {fit_quality} accuracy. "
+            f"Forecast band reflects in-sample uncertainty only."
+        )
+    out.append(_key_box("Key Interpretation", msg))
+    return out
+
+
+# ---------- FORECAST: backtest narration ----------
+
+def narrate_backtest(bt_result, model_label: str, horizon: int,
+                       currency: str = "USD") -> List:
+    """Prose for the walk-forward backtest section."""
+    if bt_result is None or not bt_result.success:
+        msg = bt_result.error_msg if bt_result else "backtest not run yet"
+        return [f"<i>Walk-forward backtest unavailable: {msg}.</i>"]
+
+    out = []
+    rmse = bt_result.overall_rmse; mape = bt_result.overall_mape
+    hit = bt_result.overall_hit_rate; n = bt_result.n_folds
+
+    # Para 1: methodology + topline
+    p1 = (
+        f"The walk-forward backtest re-trains <b>{model_label}</b> across "
+        f"<b>{n} historical retraining folds</b>, each forecasting "
+        f"<b>{horizon} months ahead</b> from a different origin. Forecasts are "
+        f"compared to the actual prices that subsequently occurred. This is the "
+        f"<i>honest</i> measure of forecasting performance — out-of-sample, no "
+        f"look-ahead bias, no curve-fitting to data the model has already seen."
+    )
+    out.append(p1)
+
+    # Para 2: aggregate accuracy interpretation
+    accuracy_word = ("strong" if mape < 10 else
+                      "moderate" if mape < 20 else
+                      "weak" if mape < 35 else
+                      "poor")
+    p2 = (
+        f"Across all {n} folds, the model's average out-of-sample MAPE is "
+        f"<b>{fmt_pct(mape, decimals=2)}</b> with RMSE of "
+        f"<b>{fmt_money(rmse, currency)}</b>. This represents <b>{accuracy_word}</b> "
+        f"out-of-sample accuracy. "
+    )
+    if mape < 10:
+        p2 += (
+            "Sub-10% MAPE on monthly steel prices is unusually good — verify "
+            "this isn't being driven by a small number of quiet years."
+        )
+    elif mape > 20:
+        p2 += (
+            "MAPE above 20% suggests the model misses major price moves. "
+            "Consider whether the driver set captures the right macro factors, "
+            "or whether structural breaks in the series make any monthly model "
+            "inherently limited."
+        )
+    out.append(p2)
+
+    # Para 3: hit rate interpretation
+    if hit > 65:
+        hit_word = ("genuine forecast skill — better than coin-flip on direction")
+    elif hit > 55:
+        hit_word = ("modest forecast skill — slightly better than coin-flip")
+    elif hit > 45:
+        hit_word = (
+            "no meaningful directional skill — outcomes near coin-flip. "
+            "Use this model for level estimates, not directional bets"
+        )
+    else:
+        hit_word = (
+            "WORSE than coin-flip on direction. The model is systematically "
+            "predicting the wrong direction. This is a strong signal something "
+            "is structurally wrong with the configuration"
+        )
+    p3 = (
+        f"<b>Direction hit rate: {hit:.0f}%</b> — meaning the model correctly "
+        f"predicted whether HRC would be up or down vs the forecast origin in "
+        f"{hit:.0f}% of folds. This indicates {hit_word}."
+    )
+    out.append(p3)
+
+    # Para 4: horizon degradation
+    if hasattr(bt_result, "metrics_by_horizon") and len(bt_result.metrics_by_horizon) > 0:
+        try:
+            mh = bt_result.metrics_by_horizon
+            short_h = mh.iloc[0]; long_h = mh.iloc[-1]
+            short_mape = float(short_h["mape"]); long_mape = float(long_h["mape"])
+            ratio = long_mape / short_mape if short_mape > 0 else None
+            p4 = (
+                f"<b>Horizon degradation:</b> at h=1 month MAPE is "
+                f"{short_mape:.1f}%; at h={int(long_h['h_months'])} months MAPE rises "
+                f"to {long_mape:.1f}%"
+            )
+            if ratio:
+                p4 += f" — a <b>{ratio:.1f}× degradation</b> across the horizon"
+            p4 += ". This is the expected pattern; an unusually flat or rising-then-flat profile may indicate the model relies primarily on slow-moving structural variables that don't decay in predictive power."
+            out.append(p4)
+        except Exception:
+            pass
+
+    # Key box
+    out.append(_key_box(
+        "Key Interpretation",
+        f"<b>{model_label}</b> over {n} historical folds: <b>{accuracy_word}</b> "
+        f"out-of-sample accuracy ({fmt_pct(mape, decimals=2)} MAPE), "
+        f"<b>{hit:.0f}%</b> direction hit rate. "
+        f"{'Use this model with confidence' if (mape < 10 and hit > 60) else 'Treat forecasts as one input among many — accuracy is not high enough for standalone trading decisions' if mape > 25 else 'Useful for trend estimation but verify direction with other signals'}."
+    ))
+    return out
+
+
+# ---------- FORECAST: GARCH narration ----------
+
+def narrate_garch_dashboard(garch_result, currency: str = "USD",
+                              latest_price: float = None) -> List:
+    """Prose for the GARCH section in the Forecasts dashboard tab."""
+    if garch_result is None or not garch_result.success:
+        msg = garch_result.error_msg if garch_result else "GARCH not fitted"
+        return [f"<i>GARCH analysis unavailable: {msg}.</i>"]
+
+    g = garch_result
+    out = []
+
+    # Para 1: persistence + half-life
+    persist_word = ("very high" if g.persistence > 0.95 else
+                     "high" if g.persistence > 0.85 else
+                     "moderate" if g.persistence > 0.6 else
+                     "low")
+    p1 = (
+        f"GARCH(1,1) fitted on log-returns yields <b>α + β = {g.persistence:.3f}</b> — "
+        f"a <b>{persist_word}</b> volatility persistence. This means a volatility "
+        f"shock today decays toward the long-run average with a half-life of "
+    )
+    if g.half_life_months and not np.isinf(g.half_life_months):
+        p1 += f"<b>{g.half_life_months:.1f} months</b>. "
+    else:
+        p1 += "<b>infinite</b> (volatility shocks are permanent in this regime — "
+        p1 += "an integrated GARCH process). "
+    p1 += (
+        "High persistence has a direct implication for risk: tail risk during "
+        "stress periods is materially worse than implied by calm-period volatility "
+        "because shocks compound rather than dissipate."
+    )
+    out.append(p1)
+
+    # Para 2: regime
+    regime_explanations = {
+        "low": (
+            "Volatility is in the bottom quartile of historical experience. "
+            "This is typically a complacency-warning signal — risk models "
+            "calibrated to current vol will materially under-state stress-period "
+            "tail losses. Position sizes calibrated to current vol may need to "
+            "be scaled down ahead of any catalyst that could trigger regime change."
+        ),
+        "normal": (
+            "Volatility is in its typical operating range (P25-P65). "
+            "Standard risk parameters apply; current market is neither "
+            "complacent nor stressed."
+        ),
+        "elevated": (
+            "Volatility is in the top third of historical experience (P65-P90). "
+            "Position sizing should be reduced relative to calm-period defaults. "
+            "Expect larger price swings and wider bid-ask spreads in the "
+            "physical market."
+        ),
+        "extreme": (
+            "Volatility is in the top decile of historical experience (P90+). "
+            "This is a stress regime — exercise maximum caution on directional "
+            "positions. Liquidity in the underlying market is likely impaired. "
+            "Hedging costs are elevated."
+        ),
+    }
+    p2 = (
+        f"<b>Current volatility regime: {g.regime_label.upper()}</b> "
+        f"(P{g.vol_percentile:.0f} of historical conditional volatility). "
+        f"{regime_explanations.get(g.regime_label, '')}"
+    )
+    out.append(p2)
+
+    # Para 3: VaR/ES interpretation
+    if g.var_95 is not None and g.expected_shortfall_95 is not None:
+        es_var_ratio = g.expected_shortfall_95 / g.var_95 if g.var_95 > 0 else None
+        p3 = (
+            f"<b>Risk metrics (1-month forward):</b> Value-at-Risk at 95% "
+            f"confidence is <b>{fmt_money(g.var_95, currency)}</b> — there is a "
+            f"5% probability of losing more than this in the next month. "
+            f"Expected Shortfall at 95% (the average loss <i>conditional on</i> "
+            f"the 5% tail event occurring) is <b>{fmt_money(g.expected_shortfall_95, currency)}</b>. "
+        )
+        if es_var_ratio:
+            p3 += (
+                f"The ES/VaR ratio of {es_var_ratio:.2f} indicates "
+                f"{'thick tails — losses well beyond VaR are likely if the tail is hit' if es_var_ratio > 1.4 else 'standard tail behaviour under normal-distribution assumption'}."
+            )
+        out.append(p3)
+        p3b = (
+            f"At the 99% level: VaR <b>{fmt_money(g.var_99, currency)}</b>, "
+            f"Expected Shortfall <b>{fmt_money(g.expected_shortfall_99, currency)}</b>. "
+            f"The 99% level captures the tail-of-tail — events expected once "
+            f"every ~100 months (roughly twice per decade)."
+        )
+        out.append(p3b)
+
+    # Key box
+    msg = (
+        f"GARCH persistence <b>{g.persistence:.3f}</b> "
+        f"(half-life ~{g.half_life_months:.0f}m), current vol regime "
+        f"<b>{g.regime_label.upper()}</b> at P{g.vol_percentile:.0f}. "
+    )
+    if g.var_95 is not None:
+        msg += f"1-month VaR (95%): {fmt_money(g.var_95, currency)}. "
+    if g.regime_label in ("elevated", "extreme"):
+        msg += "Risk environment is HEIGHTENED — reduce position sizing accordingly."
+    elif g.regime_label == "low":
+        msg += "Risk environment appears CALM but be aware of regime-shift risk."
+    else:
+        msg += "Risk environment is within normal operating range."
+    out.append(_key_box("Key Interpretation", msg))
+    return out
