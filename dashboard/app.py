@@ -29,6 +29,7 @@ from plotly.subplots import make_subplots
 from pipeline.data_loader import load_data
 from pipeline.diagnostics import adf_table, vif_table, correlation_matrix
 from pipeline.lead_lag import lead_lag_summary, rolling_correlations
+from pipeline import narrator
 from pipeline.spread import analyse_region as analyse_spread, cross_region_comparison
 from pipeline.regimes import classify_regimes
 from pipeline.attribution import rolling_attribution
@@ -210,6 +211,41 @@ def cached_backtest(_region, region_key: str, model_type: str,
 def cached_garch(_region, region_key: str, horizon: int, file_mtime: float):
     from pipeline.forecasting import fit_garch_with_risk
     return fit_garch_with_risk(_region.y, horizon=horizon)
+
+
+# ---------- Render helper: convert narrator blocks to Streamlit HTML ----------
+def render_interpretation(blocks, label: str = "📝 Interpretation",
+                            settings_summary: str = None):
+    """
+    Render narrator output as a collapsible expander. Default collapsed.
+    blocks: list of strings (paragraphs) and dicts ({'_kind': 'key_interpretation'} etc.)
+    settings_summary: optional one-line summary of current control values.
+    """
+    with st.expander(label, expanded=False):
+        if settings_summary:
+            st.caption(f"⚙ {settings_summary}")
+        for b in blocks:
+            if isinstance(b, dict) and b.get("_kind") == "key_interpretation":
+                st.markdown(
+                    f'<div style="background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%);'
+                    f' border-left: 4px solid #1F4E79; padding: 12px 18px; margin: 12px 0;'
+                    f' border-radius: 6px;">'
+                    f'<div style="font-size: 0.7rem; font-weight: 700; color: #1F4E79;'
+                    f' text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">'
+                    f'{b["title"]}</div>'
+                    f'<div style="font-size: 0.92rem; color: #1A1F2E; line-height: 1.55;">'
+                    f'{b["body"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            elif isinstance(b, str):
+                st.markdown(
+                    f'<p style="font-size: 0.93rem; line-height: 1.65; color: #2D3748;'
+                    f' margin: 8px 0;">{b}</p>',
+                    unsafe_allow_html=True,
+                )
+            # event_card blocks: not used in dashboard interpretations
+
 
 
 # ---------- Color palette ----------
@@ -497,6 +533,13 @@ with tab_spread:
         st.warning(f"No spread config for {region_pick}. Add `spread:` block to "
                    f"config.yaml under data.regions.{region_pick}.")
     else:
+        # Live interpretation panel (collapsed by default)
+        render_interpretation(
+            narrator.narrate_spread(spread, currency),
+            label="📝 Spread interpretation",
+            settings_summary=f"Region: {region_pick.title()}, Currency: {currency}",
+        )
+
         cur = spread.current_snapshot
         st.markdown(f"**Spread = HRC − ({spread.spread_config.get('iron_ore_weight', 1.6)} × Iron Ore + "
                     f"{spread.spread_config.get('hcc_weight', 0.9)} × HCC)** in {currency}/t")
@@ -578,6 +621,19 @@ with tab_lead_lag:
     else:
         max_lag = st.slider("Max lag (months)", 3, 24, 12)
         ll = cached_lead_lag(filt_region, filter_key, max_lag, file_mtime)
+
+        # Live interpretation
+        try:
+            target_name = filt_region.y.name if hasattr(filt_region.y, "name") else "HRC"
+            render_interpretation(
+                narrator.narrate_lead_lag(ll, target_name),
+                label="📝 Lead/Lag interpretation",
+                settings_summary=f"Region: {region_pick.title()}, Max lag: ±{max_lag}m, "
+                                  f"Drivers selected: {len(selected_drivers)}",
+            )
+        except Exception as _e:
+            pass
+
         st.subheader("Best Lead/Lag per Driver")
         fig = go.Figure()
         colors_list = [COLORS["accent"] if g else COLORS["muted"]
@@ -604,6 +660,18 @@ with tab_regimes:
     else:
         n_reg = st.slider("Number of regimes", 2, 5, 3)
         regimes = cached_regimes(filt_region, filter_key, n_reg, file_mtime)
+
+        # Live interpretation
+        try:
+            render_interpretation(
+                narrator.narrate_regimes(regimes, currency),
+                label="📝 Regimes interpretation",
+                settings_summary=f"Region: {region_pick.title()}, Regimes: {n_reg}, "
+                                  f"Drivers: {len(selected_drivers)}",
+            )
+        except Exception:
+            pass
+
         st.metric("Current regime", f"Regime {regimes.current_regime}",
                    f"of {regimes.n_regimes}")
         # Plot
@@ -632,6 +700,16 @@ with tab_cyclicity:
     except Exception as e:
         st.error(f"Cyclicity analysis failed: {type(e).__name__}: {e}")
         st.stop()
+
+    # Live interpretation
+    try:
+        render_interpretation(
+            narrator.narrate_cyclicity(cyc, currency),
+            label="📝 Cyclicity interpretation",
+            settings_summary=f"Region: {region_pick.title()}, GMM regimes: {n_cyc}",
+        )
+    except Exception:
+        pass
 
     # Top-line metrics
     cur_p = cyc.regime_profiles[cyc.current_regime]
@@ -740,6 +818,18 @@ with tab_attribution:
         if len(attr.rolling_betas) == 0:
             st.warning(f"Not enough data for {window}-month window.")
         else:
+            # Live interpretation
+            try:
+                render_interpretation(
+                    narrator.narrate_attribution(attr, currency),
+                    label="📝 Attribution interpretation",
+                    settings_summary=f"Region: {region_pick.title()}, "
+                                      f"Rolling window: {window}m, "
+                                      f"Drivers: {len(selected_drivers)}",
+                )
+            except Exception:
+                pass
+
             st.subheader("Current attribution")
             cur_df = attr.current_attribution.reset_index()
             cur_df.columns = ["Driver", "Attribution (%)"]
@@ -940,10 +1030,30 @@ with tab_forecast:
         fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
                                   forecast_horizon, drivers_tuple, file_mtime)
         _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
+        try:
+            render_interpretation(
+                narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency),
+                label="📝 ARIMAX interpretation",
+                settings_summary=f"AR={ar_arx}, d={d_arx}, MA={ma_arx}, "
+                                  f"horizon={forecast_horizon}m, "
+                                  f"{len(selected_drivers)} drivers",
+            )
+        except Exception:
+            pass
     elif model_choice == "ARDL":
         fit_ardl = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
                                  forecast_horizon, drivers_tuple, file_mtime)
         _render_fit(fit_ardl, "ARDL", COLORS["accent2"])
+        try:
+            render_interpretation(
+                narrator.narrate_model_fit(fit_ardl, "ARDL", selected_drivers, currency),
+                label="📝 ARDL interpretation",
+                settings_summary=f"AR={ar_ardl}, DL={dl_ardl}, "
+                                  f"horizon={forecast_horizon}m, "
+                                  f"{len(selected_drivers)} drivers",
+            )
+        except Exception:
+            pass
     else:  # Both (compare)
         fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
                                   forecast_horizon, drivers_tuple, file_mtime)
@@ -976,6 +1086,23 @@ with tab_forecast:
             _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
         with st.expander("ARDL details"):
             _render_fit(fit_ardl_r, "ARDL", COLORS["accent2"])
+
+        # Combined interpretation comparing both
+        try:
+            both_blocks = []
+            both_blocks.extend(narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency))
+            both_blocks.append("<hr style='border: 0; border-top: 1px dashed #E5E9F0; margin: 16px 0;'>")
+            both_blocks.extend(narrator.narrate_model_fit(fit_ardl_r, "ARDL", selected_drivers, currency))
+            render_interpretation(
+                both_blocks,
+                label="📝 Combined ARIMAX + ARDL interpretation",
+                settings_summary=f"ARIMAX({ar_arx},{d_arx},{ma_arx}) vs "
+                                  f"ARDL(ar={ar_ardl}, dl={dl_ardl}), "
+                                  f"horizon={forecast_horizon}m, "
+                                  f"{len(selected_drivers)} drivers",
+            )
+        except Exception:
+            pass
 
 
     # ===== SECTION B: Walk-Forward Backtest =====
@@ -1015,6 +1142,18 @@ with tab_forecast:
         if not bt.success:
             st.error(f"Backtest failed: {bt.error_msg}")
         else:
+            # Live interpretation
+            try:
+                render_interpretation(
+                    narrator.narrate_backtest(bt, bt_model, bt_horizon, currency),
+                    label="📝 Backtest interpretation",
+                    settings_summary=f"{bt_model}, horizon={bt_horizon}m, "
+                                      f"min train={bt_min_train}m, step={bt_step}m, "
+                                      f"{len(selected_drivers)} drivers",
+                )
+            except Exception:
+                pass
+
             # Top-line metrics
             tm1, tm2, tm3, tm4 = st.columns(4)
             tm1.metric("Folds completed", bt.n_folds)
@@ -1078,6 +1217,18 @@ with tab_forecast:
     if not g.success:
         st.error(f"GARCH fit failed: {g.error_msg}")
     else:
+        # Live interpretation
+        try:
+            render_interpretation(
+                narrator.narrate_garch_dashboard(g, currency,
+                                                    latest_price=float(region.y.iloc[-1])),
+                label="📝 GARCH / risk interpretation",
+                settings_summary=f"Region: {region_pick.title()}, "
+                                  f"Forecast horizon: {forecast_horizon}m",
+            )
+        except Exception:
+            pass
+
         # Top-line GARCH metrics
         gm1, gm2, gm3, gm4 = st.columns(4)
         gm1.metric("Persistence (α+β)", f"{g.persistence:.3f}",
@@ -1298,6 +1449,19 @@ with tab_macro:
             e for e in cal.events
             if e.impact in filter_impact and e.country in filter_country
         ]
+
+        # Live interpretation — only intro paragraphs (per-event cards already render below)
+        try:
+            intro_blocks = list(narrator.narrate_macro_calendar_intro(cal))
+            past_msg = f", incl. {past_days}d past" if show_past else ""
+            render_interpretation(
+                intro_blocks,
+                label="📝 Calendar overview interpretation",
+                settings_summary=f"Window: {window_days}d forward{past_msg}, "
+                                  f"{len(filtered_events)} events shown",
+            )
+        except Exception:
+            pass
 
         st.markdown("---")
         st.markdown(f"**Showing {len(filtered_events)} of {len(cal.events)} events.** "
