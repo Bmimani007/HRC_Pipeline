@@ -1,0 +1,20 @@
+# NEVER commit secrets or output to GitHub
+.streamlit/secrets.toml
+*.secret
+.env
+
+# Generated outputs (rebuilt on every cloud deploy anyway)
+outputs/results.json
+outputs/*.html
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# Mac noise
+.DS_Store
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
