@@ -768,3 +768,50 @@ entries:
       driver's relative explanatory power. Shifts over time reveal regime
       changes — e.g., DXY's attribution to HRC rises during dollar-strength
       regimes.
+
+  - term: cointegration
+    full_name: Cointegration
+    category: statistical
+    short: Two non-stationary price series are cointegrated if their linear combination is stationary.
+    detail: |
+      Cointegrated series share a long-run equilibrium — they may drift apart
+      temporarily but a forcing relationship pulls them back together. This is
+      the statistical foundation of pairs trading. Two stocks, two currencies,
+      or two HRC markets being cointegrated means the spread between them
+      mean-reverts. Test: Engle-Granger or Johansen.
+    see_also: [Engle-Granger, stationarity, I(1)]
+
+  - term: Engle-Granger
+    full_name: Engle-Granger cointegration test
+    category: statistical
+    short: Two-step test for whether two non-stationary series are cointegrated.
+    detail: |
+      Step 1: regress one series on the other to estimate the equilibrium
+      relationship. Step 2: ADF-test the residuals. If residuals are stationary
+      (p < 0.05), the two series are cointegrated. Simpler than Johansen but
+      assumes a single cointegrating vector and treats one variable as dependent.
+      Adequate for pairwise tests; use Johansen for multivariate cointegration.
+    see_also: [cointegration, ADF, stationarity]
+
+  - term: returns
+    full_name: Log returns
+    category: statistical
+    short: Period-over-period log price changes — currency-neutral and approximately stationary.
+    detail: |
+      r_t = log(p_t / p_{t-1}). Used instead of price levels for analyses
+      requiring stationarity (most ML and time-series methods). Returns are
+      unit-free, so cross-region or cross-currency analysis works without
+      conversion. Returns are also approximately additive over time, which
+      makes them analytically convenient.
+    see_also: [stationarity, differencing]
+
+  - term: cross-region
+    full_name: Cross-region analysis
+    category: dashboard
+    short: Lead-lag, Granger, and cointegration analysis across HRC markets (China, India, US).
+    detail: |
+      The Cross-Region tab shows pairwise relationships across regions. All
+      lead-lag analysis runs on returns (currency-neutral); cointegration uses
+      levels. Identifies which markets lead which, whether long-run equilibrium
+      exists, and how strong cross-market correlation is.
+    see_also: [returns, Granger causality, cointegration]
