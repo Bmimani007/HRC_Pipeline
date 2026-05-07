@@ -1,0 +1,770 @@
+# =============================================================================
+# HRC Dashboard Glossary
+# =============================================================================
+# Knowledge base of terms used throughout the dashboard. Loaded by the sidebar
+# search and the Glossary tab. Add new entries as needed — the dashboard picks
+# them up automatically on next data refresh.
+#
+# SCHEMA per entry:
+#   - term: short label (e.g., "VIF")
+#     full_name: optional spelled-out name
+#     category: one of [statistical, model, hrc-domain, macro, dashboard]
+#     short: one-sentence definition (~20 words)
+#     detail: 2-5 sentence explanation
+#     see_also: list of other term keys (optional)
+# =============================================================================
+
+entries:
+
+  # ==========================================================================
+  # STATISTICAL CONCEPTS
+  # ==========================================================================
+
+  - term: VIF
+    full_name: Variance Inflation Factor
+    category: statistical
+    short: Measures how much a driver's coefficient variance is inflated by correlation with other drivers.
+    detail: |
+      VIF quantifies multicollinearity — the degree to which one driver can be
+      predicted from the others. VIF = 1 means no correlation; VIF > 5 indicates
+      moderate multicollinearity; VIF > 10 indicates severe multicollinearity
+      that makes coefficient estimates unstable. When two drivers are highly
+      correlated, the model can't distinguish their individual effects, so
+      removing one usually improves model interpretability without losing
+      predictive power.
+    see_also: [multicollinearity, coefficient]
+
+  - term: ADF
+    full_name: Augmented Dickey-Fuller test
+    category: statistical
+    short: Tests whether a time series is stationary (mean-reverting) or has a trending random walk.
+    detail: |
+      ADF tests the null hypothesis that a series has a unit root (is non-
+      stationary). Low p-value (typically < 0.05) lets you reject the null —
+      the series is stationary in levels. High p-value means the series likely
+      needs differencing before modelling. Most economic price series fail
+      ADF in levels but pass after first differencing — they are I(1).
+    see_also: [stationarity, differencing, I(1)]
+
+  - term: stationarity
+    category: statistical
+    short: Property of a time series whose mean, variance, and autocorrelation don't change over time.
+    detail: |
+      Stationary series are easier to model — most classical forecasting methods
+      assume stationarity. A series with a trend, seasonality, or growing
+      variance is non-stationary. The fix is usually differencing (model the
+      changes rather than levels) or transformation (taking logs). HRC prices
+      in levels are non-stationary; HRC returns (log-differences) are
+      approximately stationary.
+    see_also: [ADF, differencing, I(1)]
+
+  - term: I(1)
+    full_name: Integrated of order 1
+    category: statistical
+    short: A series that becomes stationary after one differencing.
+    detail: |
+      I(1) means the level is non-stationary but the first difference (period-
+      to-period change) is stationary. Most asset prices are I(1) — random walks
+      with drift. Two I(1) series can be cointegrated (they drift apart only
+      temporarily), which is the basis for spread/pairs analysis.
+    see_also: [stationarity, ADF, differencing]
+
+  - term: differencing
+    category: statistical
+    short: Subtracting each value from the previous one to make a non-stationary series stationary.
+    detail: |
+      First differencing converts levels to changes: x_t - x_{t-1}. Series that
+      need d=1 differencing to become stationary are called I(1). Differencing
+      removes deterministic trends and makes the series mean-reverting around
+      zero. The "d" parameter in ARIMA(p,d,q) specifies how many times to
+      difference before modelling the AR/MA structure.
+    see_also: [stationarity, ADF, I(1), ARIMAX]
+
+  - term: Granger causality
+    category: statistical
+    short: Tests whether one time series helps predict another beyond what the other's own past predicts.
+    detail: |
+      X Granger-causes Y if including past X values improves forecasts of Y
+      compared to using past Y alone. This is statistical predictive precedence,
+      not true causation — a leading indicator that consistently moves before
+      the target. In the dashboard, the Lead/Lag tab uses Granger to filter
+      drivers: those that Granger-cause HRC are highlighted as genuine leading
+      indicators rather than coincidental correlates.
+    see_also: [cross-correlation, Granger causality]
+
+  - term: cross-correlation
+    full_name: Cross-correlation function (CCF)
+    category: statistical
+    short: Correlation between a driver and the target at different time lags.
+    detail: |
+      CCF measures how driver values at time t-k relate to target values at time
+      t, across many values of k (lag). The lag with the strongest correlation
+      reveals the lead-lag relationship. Positive lag means the driver leads the
+      target (driver moved k months ago is correlated with current target);
+      negative lag means the driver lags the target.
+    see_also: [Granger causality]
+
+  - term: R²
+    full_name: Coefficient of determination
+    category: statistical
+    short: Fraction of target variance explained by the model. Ranges from 0 (none) to 1 (perfect).
+    detail: |
+      R² = 1 - (sum of squared residuals) / (total variance). High R² indicates
+      good in-sample fit but does NOT guarantee good out-of-sample forecasts.
+      Models can have high R² and still fail dramatically out-of-sample
+      (overfitting). For monthly steel prices, in-sample R² above 0.85 is
+      common but should not be treated as forecast accuracy — see walk-forward
+      backtest for honest evaluation.
+    see_also: [RMSE, MAPE, AIC, BIC, overfitting]
+
+  - term: RMSE
+    full_name: Root Mean Squared Error
+    category: statistical
+    short: Square root of average squared forecast error. Same units as the target (e.g., USD/t).
+    detail: |
+      RMSE penalises large errors more than small ones (because errors are
+      squared before averaging). It's interpretable in the original units, so
+      RMSE of 30 means typical forecast error is around 30 USD/t. Use RMSE for
+      comparing models on the same target; use MAPE for comparing across
+      different scales.
+    see_also: [MAPE, R²]
+
+  - term: MAPE
+    full_name: Mean Absolute Percentage Error
+    category: statistical
+    short: Average absolute forecast error expressed as a percentage of actual values.
+    detail: |
+      MAPE = mean(|actual - forecast| / |actual|) × 100%. Scale-free, so
+      comparable across regions or commodities. Sub-5% MAPE is excellent for
+      monthly commodity prices; 10-20% is typical; >25% suggests the model
+      doesn't capture material structure. MAPE is asymmetric (treats over- and
+      under-forecasts equally only in absolute terms), so consider MdAPE or
+      sMAPE for series that move close to zero.
+    see_also: [RMSE, R²]
+
+  - term: AIC
+    full_name: Akaike Information Criterion
+    category: statistical
+    short: Model fit metric that penalises complexity. Lower is better.
+    detail: |
+      AIC = 2k - 2ln(L), where k is the number of parameters and L is the
+      likelihood. It rewards good fit and penalises adding parameters. When
+      comparing two models on the same data, the one with lower AIC is
+      preferred. A difference of 2-7 is meaningful; >10 is strong evidence.
+      AIC tends to favour slightly more complex models than BIC.
+    see_also: [BIC, overfitting]
+
+  - term: BIC
+    full_name: Bayesian Information Criterion
+    category: statistical
+    short: Like AIC but penalises complexity more strongly. Lower is better.
+    detail: |
+      BIC = ln(n)k - 2ln(L), with stronger complexity penalty as sample size n
+      grows. Tends to favour parsimonious models more than AIC. When AIC and
+      BIC agree on the best model, the choice is robust; when they disagree,
+      AIC favours the more complex model and BIC the simpler one. For HRC
+      monthly data with 100+ observations, BIC's penalty meaningfully
+      discourages over-parametrisation.
+    see_also: [AIC, overfitting]
+
+  - term: p-value
+    category: statistical
+    short: Probability that the observed result could occur by chance under the null hypothesis.
+    detail: |
+      In coefficient tables, p < 0.05 conventionally indicates the coefficient
+      is statistically distinguishable from zero (significant). p < 0.01 is
+      stronger evidence. Note that statistical significance ≠ economic
+      significance — a tiny coefficient with p < 0.001 may matter less than
+      a large coefficient with p = 0.10. Also avoid "p-hacking" by repeatedly
+      testing slightly different models.
+
+  - term: Ljung-Box
+    full_name: Ljung-Box Q test
+    category: statistical
+    short: Tests whether residuals from a model show remaining autocorrelation.
+    detail: |
+      Computed on residuals after fitting. Null hypothesis: residuals are
+      independent (model captured the structure). p > 0.05 means we fail to
+      reject — residuals look like noise (good). p < 0.05 means residuals still
+      have predictable structure the model missed — try increasing AR or MA
+      order. The Forecasts tab reports Ljung-Box at lag 10.
+    see_also: [autocorrelation, residuals]
+
+  - term: multicollinearity
+    category: statistical
+    short: When two or more drivers are highly correlated, making coefficient estimates unstable.
+    detail: |
+      Severe multicollinearity (VIF > 10) means the model can't reliably
+      attribute effects to individual drivers. Coefficients can flip sign or
+      become statistically insignificant even when drivers are economically
+      important. Remedies: drop the redundant driver, combine them via principal
+      components, or use regularised regression (Ridge/Lasso). For the HRC
+      pipeline, iron ore + scrap often have VIF ~3-5 (moderate but acceptable).
+    see_also: [VIF]
+
+  - term: percentile
+    category: statistical
+    short: A value's rank in a distribution — P50 is the median, P90 means 90% of values are smaller.
+    detail: |
+      Used throughout the dashboard to contextualise current values: "iron ore
+      at P55" means iron ore is currently above 55% of historical observations.
+      Percentiles communicate position without requiring users to recall the
+      full historical range. Spread regimes (compressed/normal/elevated) are
+      defined by percentile bands.
+    see_also: [spread regime]
+
+  - term: z-score
+    category: statistical
+    short: How many standard deviations a value is from its historical mean.
+    detail: |
+      Z = (value - mean) / std. |Z| > 2 is unusual (occurs ~5% of the time
+      under normality); |Z| > 3 is rare (~0.3%). Used for outlier detection
+      and standardising features before clustering or PCA.
+
+  - term: confidence interval
+    full_name: Confidence interval (CI)
+    category: statistical
+    short: Range of plausible forecast values at a chosen confidence level (typically 95%).
+    detail: |
+      A 95% CI means: if we repeated this analysis many times under the same
+      conditions, the true value would fall in the interval 95% of the time.
+      It does NOT mean "95% probability the true value is in this specific
+      interval" (that's a Bayesian credible interval). Forecast CIs widen with
+      horizon because uncertainty compounds. CIs only capture in-sample
+      uncertainty — they don't account for regime shifts.
+
+  - term: significance
+    full_name: Statistical significance
+    category: statistical
+    short: A finding is statistically significant if its p-value is below a threshold (typically 0.05).
+    detail: |
+      Significance indicates the effect is unlikely to be pure chance, but
+      doesn't measure how large or important the effect is. A coefficient can
+      be highly significant (p < 0.001) yet economically tiny. Conversely, a
+      large coefficient with p = 0.07 may be more important than a small
+      coefficient with p = 0.001. Always read magnitude alongside significance.
+    see_also: [p-value]
+
+
+  # ==========================================================================
+  # MODELS
+  # ==========================================================================
+
+  - term: ARIMAX
+    full_name: AutoRegressive Integrated Moving Average with eXogenous regressors
+    category: model
+    short: Forecasting model combining AR (own past), MA (past errors), differencing, and external drivers.
+    detail: |
+      ARIMAX(p,d,q) parameters: p = number of AR lags (own past values),
+      d = differencing order (typically 1 for prices), q = MA lags (past
+      errors). The "X" adds exogenous drivers (iron ore, HCC, etc.) that are
+      assumed to influence the target. Strong for monthly commodity prices
+      where the dominant signal is mean reversion + raw material pass-through.
+      Limited because it can't capture nonlinear relationships.
+    see_also: [ARDL, AR, MA, differencing]
+
+  - term: ARDL
+    full_name: AutoRegressive Distributed Lag model
+    category: model
+    short: Forecasting model with lags of both the target AND each driver.
+    detail: |
+      ARDL(p, q) parameters: p = AR lags of target, q = distributed lags of
+      each driver. Useful when drivers have delayed effects (e.g., iron ore
+      changes today affect HRC over the next 3 months). Differs from ARIMAX
+      because ARDL explicitly models lag structure of drivers; ARIMAX treats
+      drivers as contemporaneous. For HRC, ARDL often slightly outperforms
+      ARIMAX when raw material lead times are material.
+    see_also: [ARIMAX, AR, distributed lag]
+
+  - term: GARCH
+    full_name: Generalised Autoregressive Conditional Heteroskedasticity
+    category: model
+    short: Models time-varying volatility — periods of high vs low variability in returns.
+    detail: |
+      Standard GARCH(1,1) specifies that today's variance depends on yesterday's
+      squared return (α component) and yesterday's variance (β component).
+      α + β = persistence; close to 1 means volatility shocks decay slowly.
+      Used to forecast risk metrics (VaR, ES) and to width-adjust forecast
+      bands. Cannot predict price direction — only the size of moves.
+    see_also: [volatility regime, VaR, persistence]
+
+  - term: AR
+    full_name: AutoRegressive
+    category: model
+    short: A model where the current value depends on its own past values.
+    detail: |
+      AR(p) means today's value = constant + φ₁·yesterday + φ₂·two_days_ago +
+      ... + φ_p·p_days_ago + noise. AR captures mean reversion (when φ's sum
+      to less than 1) or trends. AR(1) is the simplest case and often
+      surprisingly hard to beat for short-horizon forecasts.
+    see_also: [MA, ARIMAX, ARDL]
+
+  - term: MA
+    full_name: Moving Average
+    category: model
+    short: A model where the current value depends on past forecast errors.
+    detail: |
+      MA(q) = constant + θ₁·yesterday's_error + θ₂·two_days_ago_error + ... +
+      noise. MA captures patterns in residual structure that AR alone misses.
+      ARIMAX combines both AR and MA terms.
+    see_also: [AR, ARIMAX]
+
+  - term: distributed lag
+    full_name: Distributed lag (DL)
+    category: model
+    short: Including not just current but also past values of a driver as separate predictors.
+    detail: |
+      A DL(2) specification on iron ore includes iron_ore_t, iron_ore_{t-1},
+      and iron_ore_{t-2} as separate predictors. Captures delayed transmission:
+      iron ore changes today may affect HRC for the next 2-3 months. Each lag
+      gets its own coefficient, so the model can quantify the time-shape of
+      each driver's effect.
+    see_also: [ARDL]
+
+  - term: walk-forward backtest
+    category: model
+    short: Honest out-of-sample test where the model is re-trained at each origin and forecasts forward.
+    detail: |
+      For each historical month t, the model is trained using only data through
+      t, then forecasts the next H months. Forecasts are compared to actual
+      values that subsequently occurred. Unlike in-sample R², walk-forward
+      reveals how the model would actually perform in production. The Forecasts
+      tab's Section B runs this with configurable horizon and step.
+    see_also: [out-of-sample, hit rate]
+
+  - term: out-of-sample
+    category: model
+    short: Performance measured on data the model has NOT seen during training.
+    detail: |
+      The honest measure of forecast quality. In-sample fit can always be
+      improved by adding parameters (overfitting); out-of-sample performance
+      reveals genuine predictive ability. Always prefer out-of-sample MAPE/RMSE
+      over in-sample equivalents when judging a model.
+    see_also: [walk-forward backtest, overfitting]
+
+  - term: hit rate
+    category: model
+    short: Percentage of forecasts that correctly predicted the direction (up vs down).
+    detail: |
+      Calculated against the forecast origin: did the forecast correctly call
+      whether the actual price would be higher or lower H months later?
+      Coin-flip baseline is 50%; >55% indicates modest skill, >65% genuine
+      skill. Hit rate matters when decisions depend on direction (hedging,
+      positioning) more than on level accuracy.
+    see_also: [walk-forward backtest]
+
+  - term: overfitting
+    category: model
+    short: Model fits historical data too well, capturing noise rather than signal — fails out-of-sample.
+    detail: |
+      Symptom: high in-sample R², low out-of-sample R². Caused by too many
+      parameters relative to data, or by repeatedly tweaking the model to
+      match historical quirks. Defence: use AIC/BIC to penalise complexity,
+      use walk-forward backtesting to measure honest performance, and prefer
+      simpler models when their accuracy is comparable.
+    see_also: [AIC, BIC, walk-forward backtest]
+
+  - term: K-means
+    category: model
+    short: Clustering algorithm that partitions observations into K groups by proximity in feature space.
+    detail: |
+      Each month is assigned to exactly one of K regimes based on its
+      multivariate position. Used in the Regimes tab. Hard classification —
+      no membership probabilities. Sensitive to initialisation, so multiple
+      runs are typically averaged. Compare with GMM (soft probabilities).
+    see_also: [GMM, regime]
+
+  - term: GMM
+    full_name: Gaussian Mixture Model
+    category: model
+    short: Soft clustering where each observation gets a probability of belonging to each regime.
+    detail: |
+      Used in the Cyclicity tab for richer regime analysis than K-means. Each
+      regime has a mean and covariance; observations are assigned probabilistically.
+      Better for borderline cases where a month is partway between regimes.
+      Combined with Markov transition matrix for cycle analysis.
+    see_also: [K-means, regime, Markov chain]
+
+  - term: Markov chain
+    category: model
+    short: Model of transitions between states where next-state probability depends only on current state.
+    detail: |
+      Used in cyclicity analysis to characterise how the market moves between
+      regimes. The transition matrix shows P(next regime = j | current regime = i).
+      Strong diagonal = regimes are persistent; strong off-diagonal entries =
+      frequent transitions. Stationary distribution shows long-run regime mix.
+
+
+  # ==========================================================================
+  # HRC DOMAIN
+  # ==========================================================================
+
+  - term: HRC
+    full_name: Hot-Rolled Coil
+    category: hrc-domain
+    short: Steel sheet rolled at high temperature — the primary input for autos, construction, machinery.
+    detail: |
+      The benchmark steel product for global commodity analysis. China HRC
+      (FOB Tianjin or similar) is the global price reference; India HRC FBD
+      (free on board destination) is the domestic reference. Margins between
+      HRC and raw materials (iron ore + coking coal) drive mill profitability.
+
+  - term: FOB
+    full_name: Free On Board
+    category: hrc-domain
+    short: Price quoted at the seller's port, excluding shipping and import costs.
+    detail: |
+      China HRC FOB = price at Chinese export terminal. Comparable across
+      buyers globally because it strips out shipping cost. Used as the
+      international steel price benchmark.
+    see_also: [CFR, FBD]
+
+  - term: FBD
+    full_name: Free on Board Destination
+    category: hrc-domain
+    short: Price including delivery to a specified destination — typical for India domestic HRC.
+    detail: |
+      India HRC FBD includes domestic transport to the buyer. Higher than FOB
+      because of logistics. Used in the Tata BPM convention for India spread.
+    see_also: [FOB, CFR]
+
+  - term: CFR
+    full_name: Cost and Freight
+    category: hrc-domain
+    short: Price including shipping to a destination port (but not insurance).
+    detail: |
+      Iron ore CFR China = Brazilian or Australian iron ore price including
+      freight to a Chinese port. Used as the input cost basis when computing
+      mill margins for Chinese mills.
+    see_also: [FOB, FBD]
+
+  - term: spread
+    full_name: HRC spread (mill margin proxy)
+    category: hrc-domain
+    short: HRC price minus the cost of raw materials needed to produce one tonne.
+    detail: |
+      Tata BPM convention: spread = HRC − (1.6 × Iron Ore + 0.9 × HCC). The
+      coefficients reflect approximate raw material requirements per tonne of
+      HRC. Spread is a real-time proxy for mill gross margin. Compressed
+      spreads (low percentile) signal margin stress; elevated spreads signal
+      profitability.
+    see_also: [spread regime, mill margin, HCC]
+
+  - term: spread regime
+    category: hrc-domain
+    short: Classification of spread into compressed / normal / elevated bands by percentile.
+    detail: |
+      Compressed: spread in bottom quartile (P0-P25). Normal: P25-P75. Elevated:
+      top quartile (P75-P100). Regimes change the analytical interpretation:
+      compressed regime tends to be self-correcting (mills cut output);
+      elevated regime tends to mean-revert (new capacity, increased imports).
+    see_also: [spread, percentile]
+
+  - term: mill margin
+    category: hrc-domain
+    short: A steel mill's gross profit per tonne, approximated by the HRC-raw-material spread.
+    detail: |
+      Real mill margins include labour, energy, depreciation, and other costs
+      not captured in the spread formula. Spread is the most timely proxy
+      because raw material and HRC prices are observable in real time.
+    see_also: [spread]
+
+  - term: HCC
+    full_name: Hard Coking Coal
+    category: hrc-domain
+    short: High-grade metallurgical coal used in blast furnace steel production.
+    detail: |
+      The second major raw material input alongside iron ore. Australian HCC
+      FOB (Premium Low Vol) is the global benchmark. Roughly 0.7-0.9 tonnes of
+      HCC are needed per tonne of HRC (varies by mill technology).
+
+  - term: iron ore
+    category: hrc-domain
+    short: Primary raw material for blast furnace steel — typically 62% Fe content benchmark.
+    detail: |
+      Iron Ore 62% Fe CFR China is the global benchmark. Approximately 1.6
+      tonnes of iron ore are needed per tonne of HRC. Iron ore is the single
+      biggest driver of HRC variability — typically explains 40-60% of HRC
+      price moves over rolling 24-month windows.
+
+  - term: supercycle
+    category: hrc-domain
+    short: An exceptionally large, multi-year price expansion driven by structural demand or supply imbalance.
+    detail: |
+      The 2020-2022 steel supercycle saw China HRC peak near $970/t, driven by
+      post-COVID stimulus + supply chain disruptions. Supercycles are rare
+      (decades apart) and typically followed by extended down-cycles as
+      capacity that was added at the peak comes online.
+    see_also: [macro cycle, cyclicity]
+
+  - term: macro cycle
+    category: hrc-domain
+    short: A complete traversal through cyclicity regimes (low → expansion → peak → contraction → low).
+    detail: |
+      The Cyclicity tab identifies macro cycles by tracking sequences of GMM
+      regime states. A typical macro cycle in HRC lasts 18-36 months. Cycle
+      analysis informs strategic positioning: where in the cycle are we, how
+      long has the current regime persisted, what's the typical exit pattern?
+    see_also: [supercycle, cyclicity, regime]
+
+  - term: cyclicity
+    category: hrc-domain
+    short: The tendency of a market to move through repeating regime patterns over time.
+    detail: |
+      Combines GMM regime classification, spectral analysis (FFT of cycle
+      periods), and Markov transition probabilities. Distinct from short-term
+      volatility — cyclicity addresses multi-year structural patterns.
+    see_also: [macro cycle, regime, GMM]
+
+  - term: regime
+    category: hrc-domain
+    short: A persistent market state with characteristic price level, volatility, and driver behaviour.
+    detail: |
+      Regimes are identified statistically (K-means, GMM) by clustering on a
+      multivariate feature space. Common HRC regimes: low/calm, expansion,
+      stress/peak, contraction. Regime classification helps filter historical
+      analogues and inform position sizing.
+    see_also: [K-means, GMM, regime]
+
+
+  # ==========================================================================
+  # MACRO
+  # ==========================================================================
+
+  - term: DXY
+    full_name: US Dollar Index
+    category: macro
+    short: Trade-weighted index of the dollar against six major currencies.
+    detail: |
+      Inversely correlated with USD-priced commodities (iron ore, oil, copper).
+      Hot US inflation → hawkish Fed → DXY up → iron ore down → marginal
+      raw-material relief for Chinese mills. For India, DXY up means INR weakness,
+      which raises imported HCC INR cost.
+
+  - term: FOMC
+    full_name: Federal Open Market Committee
+    category: macro
+    short: The US Fed body that sets interest rates — meets eight times per year.
+    detail: |
+      Rate decisions move the dollar and global risk appetite. FOMC announcements
+      are typically the largest single mover of monthly iron ore prices. The
+      March, June, September, December meetings include updated economic
+      projections (the SEP / dot plot). Press conference often moves more than
+      the decision itself.
+    see_also: [dot plot, SEP, hawkish, dovish]
+
+  - term: dot plot
+    category: macro
+    short: FOMC's projection of where each member expects rates to be in coming years.
+    detail: |
+      Released alongside the SEP at March/June/September/December FOMC meetings.
+      Markets focus on the median 2026 / 2027 dot. A dot plot shift higher (more
+      hawkish) drives DXY up and iron ore down. The dot plot contains the
+      forward guidance market traders price most aggressively.
+    see_also: [FOMC, SEP, hawkish]
+
+  - term: SEP
+    full_name: Summary of Economic Projections
+    category: macro
+    short: FOMC's quarterly forecast of GDP, unemployment, inflation, and policy rates.
+    detail: |
+      Released at March/June/September/December FOMC meetings. Includes the
+      famous dot plot. Material revisions to growth or inflation forecasts move
+      markets meaningfully.
+    see_also: [FOMC, dot plot]
+
+  - term: hawkish
+    category: macro
+    short: Favouring tighter monetary policy (higher rates, less liquidity).
+    detail: |
+      Hawkish surprises (Fed signals more rate hikes than expected) typically
+      strengthen the dollar and weaken commodities. Hawkish CPI = inflation
+      hotter than expected, supporting hawkish Fed stance.
+    see_also: [dovish, FOMC]
+
+  - term: dovish
+    category: macro
+    short: Favouring looser monetary policy (lower rates, more liquidity).
+    detail: |
+      Dovish surprises (Fed signals fewer hikes / more cuts than expected)
+      typically weaken the dollar and strengthen commodities. Dovish PCE = core
+      inflation cooler than expected, supporting Fed cuts.
+    see_also: [hawkish, FOMC]
+
+  - term: PMI
+    full_name: Purchasing Managers' Index
+    category: macro
+    short: Survey-based indicator of manufacturing or services activity. >50 = expansion, <50 = contraction.
+    detail: |
+      ISM Manufacturing PMI (US) is the most-watched industrial indicator.
+      Sustained sub-48 readings signal manufacturing recession. New Orders
+      sub-component leads the headline by ~3 months and is the cleanest
+      forward signal for steel demand. China PMI is similarly tracked.
+
+  - term: NFP
+    full_name: Non-Farm Payrolls
+    category: macro
+    short: Monthly US employment report — biggest single mover of the dollar each month.
+    detail: |
+      Strong NFP + firm wages = hawkish Fed pricing = DXY up = iron ore down.
+      Weak NFP = recession fears + dovish Fed = DXY down = iron ore up.
+      The wage-growth component (average hourly earnings) is critical: hot
+      wages signal sticky inflation regardless of headline.
+
+  - term: CPI
+    full_name: Consumer Price Index
+    category: macro
+    short: Headline US inflation gauge — direct input to Fed policy decisions.
+    detail: |
+      Hot CPI (>3.0% headline) keeps Fed hawkish, drives DXY up, weakens iron
+      ore. Cool CPI does the opposite. Pre-FOMC CPI releases are amplified
+      because they pre-position the rate decision. Core CPI (ex-food and
+      energy) is the cleaner trend signal.
+
+  - term: PCE
+    full_name: Personal Consumption Expenditures Deflator
+    category: macro
+    short: The Fed's preferred inflation gauge. Released about 2 weeks after CPI.
+    detail: |
+      Core PCE excludes food and energy and is the Fed's primary inflation
+      target (long-run goal: 2%). Often moves markets more than CPI when it
+      diverges materially from CPI's signal. Released by the BEA at month-end.
+
+  - term: PPI
+    full_name: Producer Price Index
+    category: macro
+    short: Wholesale inflation — leads CPI by 1-2 months in transmission.
+    detail: |
+      PPI changes flow through to CPI as producers pass costs to consumers.
+      Sticky PPI signals CPI will stay elevated. Less market-moving on the day
+      than CPI but useful as a leading inflation indicator.
+
+  - term: transmission channel
+    category: macro
+    short: The economic linkage by which a macro event affects HRC prices.
+    detail: |
+      Six channels mapped in the dashboard's Macro Calendar: DXY → iron ore;
+      China demand direct (GDP, IP); China export pressure → India; US demand →
+      China exports; European steel demand; oil → steel input cost. Each event
+      is tagged with its primary channel.
+
+  - term: volatility regime
+    category: macro
+    short: Classification of the current GARCH-estimated volatility into low/normal/elevated/extreme bands.
+    detail: |
+      Calculated by percentile of current conditional vol in its full-sample
+      distribution. LOW (P0-P25), NORMAL (P25-P65), ELEVATED (P65-P90),
+      EXTREME (P90+). Risk parameters and position sizing should adjust to
+      regime — calm-period defaults under-state stress losses.
+    see_also: [GARCH, persistence, VaR]
+
+  - term: VaR
+    full_name: Value-at-Risk
+    category: macro
+    short: Maximum likely loss at a given confidence level (e.g., VaR 95% = 5% chance of losing more).
+    detail: |
+      VaR 95% = $X means there is a 5% probability of losing more than $X over
+      the specified horizon (1 month in this dashboard). Computed from GARCH
+      forecast variance under a normal distribution assumption. Underestimates
+      true tail loss because returns have fatter tails than normal.
+    see_also: [Expected Shortfall, GARCH]
+
+  - term: Expected Shortfall
+    full_name: Expected Shortfall (ES) / Conditional VaR (CVaR)
+    category: macro
+    short: Average loss IF the worst-case scenario occurs (the 5% tail).
+    detail: |
+      More honest than VaR because it captures the magnitude of tail losses,
+      not just their threshold. ES at 95% confidence = average loss across the
+      worst 5% of outcomes. Use ES rather than VaR for capital-at-risk
+      decisions.
+    see_also: [VaR, GARCH]
+
+  - term: persistence
+    full_name: GARCH persistence (α + β)
+    category: macro
+    short: How slowly volatility shocks decay. Values near 1 mean shocks last a long time.
+    detail: |
+      α + β = persistence parameter. Half-life = log(0.5) / log(persistence).
+      For HRC China FOB, persistence is typically 0.95-0.97 → half-life of
+      roughly 14-22 months. High persistence amplifies tail risk during stress
+      because shocks compound rather than dissipate.
+    see_also: [GARCH, volatility regime]
+
+
+  # ==========================================================================
+  # DASHBOARD-SPECIFIC
+  # ==========================================================================
+
+  - term: walk-forward window
+    category: dashboard
+    short: In Section B, the configurable training period and step between backtest folds.
+    detail: |
+      Min training months = how much history each fold's training set must
+      cover. Step = how many months the training origin advances between folds.
+      Smaller step = more folds = better evaluation but slower compute.
+
+  - term: forecast horizon
+    category: dashboard
+    short: How many months into the future the model forecasts.
+    detail: |
+      Slider in the Forecast Laboratory ranges 3-24 months. Longer horizons
+      have wider confidence intervals because uncertainty compounds. Beyond
+      12 months, structural assumptions (drivers held flat) become increasingly
+      tenuous.
+
+  - term: driver
+    category: dashboard
+    short: An exogenous variable used to predict HRC (iron ore, HCC, scrap, DXY, etc.).
+    detail: |
+      The dashboard supports user-controlled driver selection in the Forecast
+      Laboratory and Lead/Lag tabs. Removing a driver lets you measure its
+      contribution: a meaningful drop in fit when removed = important driver.
+
+  - term: residuals
+    category: dashboard
+    short: Forecast errors — actual minus fitted values. Should look like white noise if model is good.
+    detail: |
+      Patterned residuals = unmodeled structure remaining. Ljung-Box test on
+      residuals checks for autocorrelation. Residual histogram should be
+      approximately symmetric and unimodal; heavy tails or skew suggest
+      non-Gaussian errors that violate model assumptions.
+    see_also: [Ljung-Box, autocorrelation]
+
+  - term: autocorrelation
+    category: dashboard
+    short: Correlation of a series with its own past values.
+    detail: |
+      Residuals from a good model should have minimal autocorrelation — past
+      errors shouldn't help predict future errors. Significant residual
+      autocorrelation indicates the model missed dynamic structure (try
+      higher AR/MA orders).
+    see_also: [Ljung-Box, residuals]
+
+  - term: coefficient
+    category: dashboard
+    short: A model's estimated weight on a driver — how much HRC moves per unit change in the driver.
+    detail: |
+      In the coefficient table, "coef" is the estimated effect, "std_err" is its
+      standard error, and "p_value" tests if it differs from zero. Sign matters:
+      positive coef means HRC rises when the driver rises; negative is the
+      opposite. Magnitude depends on units (be careful comparing across drivers).
+    see_also: [p-value, significance]
+
+  - term: fan chart
+    category: dashboard
+    short: Forecast chart showing point estimate plus widening uncertainty bands.
+    detail: |
+      In the GARCH section, the fan uses ARIMAX point forecast as centre, with
+      ±1σ, ±2σ, ±3σ bands derived from GARCH conditional variance. Bands grow
+      with horizon because cumulative uncertainty compounds with √h.
+
+  - term: attribution
+    full_name: Driver attribution
+    category: dashboard
+    short: Decomposition of HRC variance into shares explained by each driver, computed in rolling windows.
+    detail: |
+      The Attribution tab uses rolling 24-month regression to estimate each
+      driver's relative explanatory power. Shifts over time reveal regime
+      changes — e.g., DXY's attribution to HRC rises during dollar-strength
+      regimes.
