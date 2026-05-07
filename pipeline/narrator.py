@@ -1427,3 +1427,145 @@ def narrate_garch_dashboard(garch_result, currency: str = "USD",
         msg += "Risk environment is within normal operating range."
     out.append(_key_box("Key Interpretation", msg))
     return out
+
+
+# ---------- CROSS-REGION extended narration ----------
+
+def narrate_cross_region_extended(cross_result) -> List:
+    """Prose for the cross-region lead-lag analysis section."""
+    if cross_result is None or not cross_result.success:
+        msg = cross_result.error_msg if cross_result else "no result"
+        return [f"<i>Cross-region analysis unavailable: {msg}.</i>"]
+
+    out = []
+
+    # Para 1: scope + methodology
+    regions_list = ", ".join(r.upper() for r in cross_result.regions_analysed)
+    p1 = (
+        f"<b>Cross-region lead-lag analysis</b> across {len(cross_result.regions_analysed)} "
+        f"HRC markets ({regions_list}). All metrics are computed on monthly returns "
+        f"(log price changes), making them currency-neutral and unit-free. The common "
+        f"overlap window is <b>{cross_result.overlap_start} → {cross_result.overlap_end}</b> "
+        f"({cross_result.n_overlap} months). Each pair is analysed separately on its "
+        f"specific overlap, which may be longer than the three-region intersection."
+    )
+    out.append(p1)
+
+    # Para 2: pair-by-pair findings
+    for pair in cross_result.pairs:
+        a = pair.region_a.upper()
+        b = pair.region_b.upper()
+
+        # Build narrative for this pair
+        pair_msg = f"<b>{a} ↔ {b}</b> ({pair.n_obs} months overlap): "
+
+        # Contemporaneous correlation
+        cc = pair.contemporaneous_corr
+        if cc is None:
+            pair_msg += "correlation could not be computed."
+            out.append(pair_msg)
+            continue
+
+        if abs(cc) >= 0.7:
+            cc_word = "strong"
+        elif abs(cc) >= 0.4:
+            cc_word = "moderate"
+        else:
+            cc_word = "weak"
+        pair_msg += f"contemporaneous correlation of <b>{cc:.2f}</b> ({cc_word}). "
+
+        # Lead-lag
+        if pair.best_lag is not None and pair.best_corr is not None:
+            if abs(pair.best_lag) == 0:
+                pair_msg += (
+                    f"Peak |correlation| occurs at lag 0, indicating "
+                    f"<b>contemporaneous co-movement</b> rather than a clear lead-lag relationship. "
+                )
+            else:
+                leader_name = a if pair.best_lag > 0 else b
+                follower_name = b if pair.best_lag > 0 else a
+                pair_msg += (
+                    f"<b>{leader_name} leads {follower_name}</b> by "
+                    f"<b>{abs(pair.best_lag)} month(s)</b> at the peak |corr| of "
+                    f"<b>{abs(pair.best_corr):.2f}</b>. "
+                )
+
+        # Granger
+        ga_b = pair.granger_a_to_b_pvalue
+        gb_a = pair.granger_b_to_a_pvalue
+        if ga_b is not None and gb_a is not None:
+            sig_a = ga_b < 0.05
+            sig_b = gb_a < 0.05
+            if sig_a and sig_b:
+                pair_msg += (
+                    f"Granger causality is bidirectional ({a}→{b}: p={ga_b:.3f}; "
+                    f"{b}→{a}: p={gb_a:.3f}) — markets influence each other. "
+                )
+            elif sig_a:
+                pair_msg += (
+                    f"Granger causality runs <b>{a}→{b}</b> only (p={ga_b:.3f}); "
+                    f"{a}'s history significantly improves forecasts of {b}, but not vice versa. "
+                )
+            elif sig_b:
+                pair_msg += (
+                    f"Granger causality runs <b>{b}→{a}</b> only (p={gb_a:.3f}); "
+                    f"{b}'s history significantly improves forecasts of {a}, but not vice versa. "
+                )
+            else:
+                pair_msg += (
+                    f"Neither direction shows significant Granger causality "
+                    f"({a}→{b}: p={ga_b:.3f}; {b}→{a}: p={gb_a:.3f}) — "
+                    f"the correlation appears to be coincidental rather than predictive. "
+                )
+
+        # Cointegration
+        if pair.cointegration_pvalue is not None:
+            if pair.cointegrated:
+                pair_msg += (
+                    f"Engle-Granger cointegration test indicates <b>long-run equilibrium</b> "
+                    f"(p={pair.cointegration_pvalue:.3f}) — price levels are tied across regions, "
+                    f"so deviations from equilibrium tend to mean-revert."
+                )
+            else:
+                pair_msg += (
+                    f"No statistical cointegration in levels (p={pair.cointegration_pvalue:.3f}) — "
+                    f"prices may drift independently over long horizons despite shorter-term correlation."
+                )
+
+        out.append(pair_msg)
+
+    # Para 3: synthesis
+    leaders = [p for p in cross_result.pairs if p.leader in ("a", "b")]
+    if leaders:
+        synthesis_parts = []
+        for p in leaders:
+            leader = p.region_a if p.leader == "a" else p.region_b
+            follower = p.region_b if p.leader == "a" else p.region_a
+            synthesis_parts.append(f"{leader.upper()}→{follower.upper()}")
+        synth = (
+            f"<b>Synthesis:</b> Across the analysed pairs, the cleanest leader-follower "
+            f"relationships are: {', '.join(synthesis_parts)}. These represent statistically-grounded "
+            f"directions of information flow between regional HRC markets."
+        )
+        out.append(synth)
+
+    # Key interpretation
+    cointegrated_pairs = sum(1 for p in cross_result.pairs if p.cointegrated)
+    leader_pairs = sum(1 for p in cross_result.pairs if p.leader in ("a", "b", "both"))
+    msg = (
+        f"Across {len(cross_result.pairs)} pairwise comparisons over "
+        f"{cross_result.n_overlap} overlapping months: <b>{leader_pairs}</b> show clear "
+        f"leader-follower dynamics, <b>{cointegrated_pairs}</b> are cointegrated in levels. "
+    )
+    if cointegrated_pairs > 0:
+        msg += (
+            "Cointegrated pairs imply long-run price equilibrium — short-run divergences "
+            "tend to revert. Useful for spread/pairs trading consideration. "
+        )
+    if leader_pairs > 0:
+        msg += (
+            "Leading regions are useful as forward indicators when forecasting follower regions; "
+            "watch the leaders' macro releases more closely."
+        )
+    out.append(_key_box("Key Interpretation", msg))
+    return out
