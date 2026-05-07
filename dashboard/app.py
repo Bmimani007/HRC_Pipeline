@@ -247,6 +247,69 @@ def render_interpretation(blocks, label: str = "📝 Interpretation",
             # event_card blocks: not used in dashboard interpretations
 
 
+# ---------- GLOSSARY system ----------
+@st.cache_data
+def load_glossary():
+    """Load glossary YAML and return as dict keyed by lowercase term."""
+    candidates = [
+        Path("data/glossary.yaml"),
+        Path(__file__).parent.parent / "data" / "glossary.yaml",
+    ]
+    for p in candidates:
+        if p.exists():
+            with open(p) as f:
+                g = yaml.safe_load(f)
+            entries = g.get("entries", [])
+            return {e["term"].lower(): e for e in entries}
+    return {}
+
+
+GLOSSARY_CATEGORIES = {
+    "statistical": ("📊", "Statistical concepts"),
+    "model": ("🧮", "Models"),
+    "hrc-domain": ("🔩", "HRC domain"),
+    "macro": ("🌍", "Macro"),
+    "dashboard": ("🎛", "Dashboard-specific"),
+}
+
+
+def _render_glossary_entry(entry: dict, glossary: dict, key_prefix: str = ""):
+    """Render a single glossary entry as expandable HTML."""
+    term = entry["term"]
+    full = entry.get("full_name", "")
+    cat = entry.get("category", "")
+    icon = GLOSSARY_CATEGORIES.get(cat, ("●", cat))[0]
+    short = entry.get("short", "")
+    detail = entry.get("detail", "").strip()
+    see_also = entry.get("see_also", [])
+
+    header = f"{icon} **{term}**"
+    if full:
+        header += f" — *{full}*"
+
+    st.markdown(header)
+    st.markdown(
+        f'<p style="font-size: 0.92rem; color: #2D3748; margin: 4px 0 8px 0;">'
+        f'<i>{short}</i></p>',
+        unsafe_allow_html=True,
+    )
+    if detail:
+        st.markdown(
+            f'<div style="font-size: 0.92rem; color: #1A1F2E; line-height: 1.6;">'
+            f'{detail}</div>',
+            unsafe_allow_html=True,
+        )
+    if see_also:
+        valid_refs = [t for t in see_also if t.lower() in glossary]
+        if valid_refs:
+            tags = " · ".join(f"`{t}`" for t in valid_refs)
+            st.markdown(
+                f'<p style="font-size: 0.82rem; color: #5C6B7F; margin-top: 8px;">'
+                f'See also: {tags}</p>',
+                unsafe_allow_html=True,
+            )
+
+
 
 # ---------- Color palette ----------
 COLORS = {"accent": "#1F4E79", "accent2": "#2D6A4F", "warning": "#C9540F",
@@ -380,6 +443,55 @@ if "report_bytes" in st.session_state:
     st.sidebar.caption(f"Built at {st.session_state.get('report_built_at', '?')}")
 
 
+# ---------- Sidebar Glossary Search ----------
+st.sidebar.markdown("---")
+st.sidebar.markdown("**📖 Glossary search**")
+_glossary = load_glossary()
+if _glossary:
+    search_query = st.sidebar.text_input(
+        "Search any term",
+        placeholder="e.g., VIF, ARIMAX, spread...",
+        key="sidebar_glossary_search",
+        label_visibility="collapsed",
+    )
+    if search_query:
+        q = search_query.strip().lower()
+        # Direct match
+        matches = []
+        if q in _glossary:
+            matches.append(_glossary[q])
+        # Partial matches in term or full_name or short
+        for key, e in _glossary.items():
+            if e in matches:
+                continue
+            if (q in key
+                or q in e.get("full_name", "").lower()
+                or q in e.get("short", "").lower()):
+                matches.append(e)
+
+        if matches:
+            st.sidebar.caption(f"{len(matches)} match{'es' if len(matches) != 1 else ''}")
+            for m in matches[:5]:
+                with st.sidebar.expander(f"📘 {m['term']}", expanded=(len(matches) == 1)):
+                    if m.get("full_name"):
+                        st.markdown(f"**{m['full_name']}**")
+                    st.markdown(f"*{m.get('short', '')}*")
+                    if m.get("detail"):
+                        st.markdown(m["detail"].strip())
+                    if m.get("see_also"):
+                        valid = [t for t in m["see_also"] if t.lower() in _glossary]
+                        if valid:
+                            st.caption(f"See also: {' · '.join(valid)}")
+            if len(matches) > 5:
+                st.sidebar.caption(f"...and {len(matches) - 5} more — see Glossary tab.")
+        else:
+            st.sidebar.caption("No matches. Try a different keyword or browse the Glossary tab.")
+    else:
+        st.sidebar.caption(f"{len(_glossary)} terms available · full browser in Glossary tab")
+else:
+    st.sidebar.caption("Glossary not loaded — check data/glossary.yaml exists.")
+
+
 # ---------- CROSS-REGION VIEW ----------
 if region_pick == "Cross-Region":
     st.title("Cross-Region Comparison")
@@ -491,8 +603,8 @@ filter_key = (
 
 
 # ---------- TABS ----------
-tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro = st.tabs([
-    "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar"
+tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro, tab_glossary = st.tabs([
+    "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar", "📖 Glossary"
 ])
 
 
@@ -1536,6 +1648,81 @@ with tab_macro:
                                 f"sample of {ev.simple_n} recent months.")
                 else:
                     st.info("Insufficient analogues — rely on mechanism above for guidance.")
+
+
+# ===== GLOSSARY TAB =====
+with tab_glossary:
+    st.markdown("### 📖 Glossary")
+    st.caption(
+        "Reference for every term used in the dashboard. Search by typing in the "
+        "sidebar search box, or browse by category below. Click any entry to expand."
+    )
+
+    glossary = load_glossary()
+    if not glossary:
+        st.warning("Glossary not loaded — check that `data/glossary.yaml` exists.")
+    else:
+        # Top filter bar
+        gc1, gc2 = st.columns([2, 3])
+        with gc1:
+            cat_filter = st.multiselect(
+                "Filter by category",
+                options=list(GLOSSARY_CATEGORIES.keys()),
+                default=list(GLOSSARY_CATEGORIES.keys()),
+                format_func=lambda c: f"{GLOSSARY_CATEGORIES[c][0]} {GLOSSARY_CATEGORIES[c][1]}",
+                key="glossary_cat_filter",
+            )
+        with gc2:
+            tab_search = st.text_input(
+                "Search within glossary",
+                placeholder="Type to filter (term, full name, or definition)...",
+                key="glossary_tab_search",
+            )
+
+        # Filter entries
+        all_entries = list(glossary.values())
+        filtered = [
+            e for e in all_entries
+            if e.get("category") in cat_filter
+        ]
+        if tab_search:
+            q = tab_search.strip().lower()
+            filtered = [
+                e for e in filtered
+                if (q in e["term"].lower()
+                    or q in e.get("full_name", "").lower()
+                    or q in e.get("short", "").lower()
+                    or q in e.get("detail", "").lower())
+            ]
+
+        # Counter + sort
+        st.caption(f"Showing {len(filtered)} of {len(all_entries)} entries")
+        st.markdown("---")
+
+        # Group by category
+        for cat_key, (icon, cat_label) in GLOSSARY_CATEGORIES.items():
+            cat_entries = sorted(
+                [e for e in filtered if e.get("category") == cat_key],
+                key=lambda x: x["term"].lower()
+            )
+            if not cat_entries:
+                continue
+
+            st.markdown(f"#### {icon} {cat_label} · {len(cat_entries)} entries")
+            # Render in a 2-col grid for compactness
+            cols = st.columns(2)
+            for i, entry in enumerate(cat_entries):
+                with cols[i % 2]:
+                    with st.expander(f"**{entry['term']}**" +
+                                       (f" — {entry.get('full_name', '')}" if entry.get('full_name') else "")):
+                        st.markdown(f"*{entry.get('short', '')}*")
+                        if entry.get("detail"):
+                            st.markdown(entry["detail"].strip())
+                        if entry.get("see_also"):
+                            valid = [t for t in entry["see_also"] if t.lower() in glossary]
+                            if valid:
+                                st.caption(f"See also: {' · '.join(valid)}")
+            st.markdown("")  # spacing between categories
 
 
 # Sidebar footer
