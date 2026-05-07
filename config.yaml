@@ -46,6 +46,22 @@ data:
         hcc_column: "Import HCC (India CFR) INR/t"
         hcc_weight: 0.9
 
+    us:
+      enabled: true
+      sheet: "US"
+      currency: "USD"
+      date_column: "Month"
+      target: "HRC US Midwest Futures (USD/st)"
+      # No drivers yet — this region is in OVERVIEW-ONLY mode.
+      # When you add driver columns to the US sheet, change drivers: auto and
+      # remove the overview_only flag below to enable all analysis tabs.
+      drivers: auto
+      overview_only: true
+      # Note on units: CME HRC futures are quoted in USD per SHORT TON (~907 kg),
+      # not per metric tonne. China data is per metric tonne. This means direct
+      # level comparison across regions is misleading; cross-region analysis
+      # uses returns (% changes) which are unit-free.
+
 
 # ---------- MODELS ----------
 # To remove a model:  set enabled: false
