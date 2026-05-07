@@ -16,14 +16,15 @@ import numpy as np
 
 @dataclass
 class RegionData:
-    """All data + metadata for one region (China or India)."""
-    name: str                                    # 'china' or 'india'
+    """All data + metadata for one region (China, India, US, etc.)."""
+    name: str                                    # 'china', 'india', 'us'
     df: pd.DataFrame                             # date-indexed dataframe
     target: str                                  # name of the target column
     drivers: List[str]                           # driver column names
     currency: str                                # 'USD' or 'INR'
     spread_config: Dict                          # iron_ore + hcc cols & weights
     skipped_columns: List[str] = field(default_factory=list)
+    overview_only: bool = False                  # True = only Overview tab in dashboard
 
     @property
     def y(self) -> pd.Series:
@@ -144,10 +145,13 @@ def _load_one_region(name: str, region_cfg: dict, file_path: str) -> RegionData:
             f"data.regions.{name}.drivers must be 'auto' or a list, got: {driver_cfg}"
         )
 
-    if len(drivers) == 0:
+    overview_only = region_cfg.get("overview_only", False)
+
+    if len(drivers) == 0 and not overview_only:
         raise _friendly_error(
             f"No usable drivers in sheet '{sheet}'. "
-            f"Add at least one numeric column besides the target."
+            f"Add at least one numeric column besides the target, "
+            f"or set 'overview_only: true' to enable overview-only mode."
         )
 
     # Drop rows where target is missing
@@ -167,6 +171,7 @@ def _load_one_region(name: str, region_cfg: dict, file_path: str) -> RegionData:
         currency=region_cfg.get("currency", "USD"),
         spread_config=region_cfg.get("spread", {}),
         skipped_columns=skipped,
+        overview_only=overview_only,
     )
 
 
