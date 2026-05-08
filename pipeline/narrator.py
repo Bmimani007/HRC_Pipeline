@@ -218,6 +218,11 @@ def narrate_correlation(corr_df: pd.DataFrame, target: str,
     target_corr = corr_df[target].drop(target).sort_values(
         key=lambda s: s.abs(), ascending=False)
 
+    # Guard: no drivers means nothing to narrate (US region in overview-only mode).
+    if len(target_corr) == 0:
+        return ["<i>No driver columns available for this region — "
+                "correlation analysis requires at least one driver.</i>"]
+
     # Identify drivers + relationships
     strongest = target_corr.iloc[0]
     strongest_var = target_corr.index[0]

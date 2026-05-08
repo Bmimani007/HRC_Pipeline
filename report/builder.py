@@ -631,6 +631,12 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
     for region_name, region_results in results["regions"].items():
         meta = region_results["meta"]
         currency = meta["currency"]
+        # Driver-dependent sections (Diagnostics, Lead-Lag, Attribution, Models)
+        # require at least one driver. US is configured with `overview_only: true`
+        # because driver data isn't yet available; for that region we render only
+        # the sections that work on the target alone.
+        is_overview_only = (meta.get("overview_only", False)
+                             or meta.get("n_drivers", 0) == 0)
 
         # ----- 1. Region overview -----
         spread = region_results.get("spread")
@@ -678,6 +684,24 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
 """
         html_parts.append(section)
 
+        # Overview-only note: regions without driver data only get the price
+        # history chart above. Tell the user explicitly why so they don't
+        # think the report is broken.
+        if is_overview_only:
+            html_parts.append(f"""
+<section>
+  <div class="subtitle" style="background: #FFF8E6; border-left: 4px solid #C9540F;
+       padding: 12px 16px; margin: 12px 0; border-radius: 4px;">
+    <b>Overview-only mode for {region_name.title()}.</b> Driver data
+    (iron ore, coking coal, etc.) is not yet wired into the {region_name.title()}
+    sheet of <code>Raw_data.xlsx</code>, so analyses that need drivers —
+    Diagnostics, Lead/Lag, Attribution, and Forecasting Models — are intentionally
+    omitted from this report. Once driver columns are added, set
+    <code>overview_only: false</code> in <code>config.yaml</code> and rerun
+    to enable the full analysis.
+  </div>
+</section>""")
+
         # ----- 2. Spread analysis -----
         if spread and not isinstance(spread, dict):
             spread_section = f"""
@@ -713,10 +737,11 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
             html_parts.append(spread_section)
 
         # ----- 3. Diagnostics -----
-        diag = region_results.get("adf")
-        corr = region_results.get("correlation")
-        vif = region_results.get("vif")
-        diag_section = f"""
+        if not is_overview_only:
+            diag = region_results.get("adf")
+            corr = region_results.get("correlation")
+            vif = region_results.get("vif")
+            diag_section = f"""
 <section>
   <h2>Diagnostics — {region_name.title()}</h2>
   <div class="subtitle">Correlation, multicollinearity, and stationarity tests for the {region_name} dataset.</div>
@@ -732,11 +757,12 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
   <h3>Stationarity (ADF)</h3>
   {_df_to_html(diag, max_rows=100)}
 </section>"""
-        html_parts.append(diag_section)
+            html_parts.append(diag_section)
 
         # ----- 4. Lead-Lag -----
-        ll = region_results.get("lead_lag")
-        ll_section = f"""
+        if not is_overview_only:
+            ll = region_results.get("lead_lag")
+            ll_section = f"""
 <section>
   <h2>Lead/Lag &amp; Causal Analysis — {region_name.title()}</h2>
   <div class="subtitle">Cross-correlation function (CCF) and Granger causality across lags.</div>
@@ -747,7 +773,7 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
                                   if ll is not None and not isinstance(ll, dict) else '<div class="empty">N/A</div>'}</div>
   {_df_to_html(ll)}
 </section>"""
-        html_parts.append(ll_section)
+            html_parts.append(ll_section)
 
         # ----- 5. Models -----
         models = region_results.get("models", {})

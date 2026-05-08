@@ -192,19 +192,133 @@ def cached_ardl(_region, region_key: str, ar: int, dl: int,
                      horizon=horizon, drivers=drivers)
 
 
-@st.cache_data(show_spinner="Running walk-forward backtest (30-90s)...")
-def cached_backtest(_region, region_key: str, model_type: str,
-                       ar: int, d: int, ma: int, dl: int,
-                       horizon: int, drivers_tuple: tuple,
-                       min_train: int, step: int, file_mtime: float):
-    from pipeline.forecasting import walk_forward_backtest
+@st.cache_data(show_spinner="Running out-of-sample test...")
+def cached_oos_test(_region, region_key: str, model_type: str,
+                     ar: int, d: int, ma: int, dl: int,
+                     test_size: int, drivers_tuple: tuple, file_mtime: float):
+    """
+    Single train/test split OOS evaluation — uses the SAME ARIMAXModel /
+    ARDLModel classes the report uses, so dashboard and report numbers
+    agree exactly when the orders match.
+
+    Holds out the last `test_size` months. Fits the chosen model on data
+    BEFORE that window, forecasts forward, then compares predictions to
+    the held-out actuals using the actual driver values for that window
+    (not held-constant), which mirrors what report/builder.py renders
+    under "Out-of-sample test metrics".
+    """
+    from types import SimpleNamespace
     drivers = list(drivers_tuple) if drivers_tuple else None
-    return walk_forward_backtest(_region.y, _region.X, model_type=model_type,
-                                    ar=ar, d=d, ma=ma, dl=dl,
-                                    drivers=drivers,
-                                    forecast_horizon=horizon,
-                                    min_train_months=min_train,
-                                    step_months=step)
+
+    y = _region.y
+    X = _region.X
+    if drivers and X is not None and len(X) > 0:
+        usable = [c for c in drivers if c in X.columns]
+        X = X[usable] if usable else X
+
+    if len(y) <= test_size + 12:
+        return SimpleNamespace(
+            success=False,
+            error_msg=f"Test size {test_size} too large — model needs at least "
+                       f"{test_size + 12} obs, region has {len(y)}.",
+        )
+
+    try:
+        if model_type.lower() == "arimax":
+            from models.arimax import ARIMAXModel
+            cfg = {"order": [ar, d, ma],
+                   "seasonal_order": [0, 0, 0, 0],
+                   "forecast_horizon": 12,
+                   "test_size": test_size}
+            model = ARIMAXModel(cfg)
+            config_summary = f"ARIMAX({ar},{d},{ma})"
+        else:
+            from models.ardl import ARDLModel
+            cfg = {"ar_order": ar, "dl_order": dl,
+                   "use_order_selection": False,
+                   "forecast_horizon": 12,
+                   "test_size": test_size}
+            model = ARDLModel(cfg)
+            config_summary = f"ARDL(ar={ar}, dl={dl})"
+
+        model.fit(y, X)
+        result = model.forecast(steps=12, region=_region.name)
+    except Exception as e:
+        return SimpleNamespace(
+            success=False,
+            error_msg=f"Model fit failed: {type(e).__name__}: {str(e)[:200]}",
+        )
+
+    if result.error:
+        return SimpleNamespace(success=False, error_msg=result.error)
+
+    if result.oos_predictions is None or result.oos_actuals is None:
+        return SimpleNamespace(
+            success=False,
+            error_msg=(f"OOS test could not run — typically because the training "
+                        f"window after holding out {test_size} months is too short. "
+                        f"Try a smaller test window."),
+        )
+
+    actual = result.oos_actuals
+    pred = result.oos_predictions
+    metrics = result.metrics or {}
+
+    # Hit rate — directional accuracy. Anchor first comparison at the last
+    # in-sample value so each test month produces one pred-vs-actual direction
+    # comparison.
+    last_train_val = float(y.iloc[-(test_size + 1)])
+    pred_full = np.concatenate([[last_train_val], pred.values])
+    actual_full = np.concatenate([[last_train_val], actual.values])
+    pred_dir = np.sign(np.diff(pred_full))
+    actual_dir = np.sign(np.diff(actual_full))
+    matches = (pred_dir == actual_dir) | (pred_dir == 0) | (actual_dir == 0)
+    hit_rate = float(np.mean(matches) * 100) if len(matches) > 0 else float("nan")
+
+    # Ljung-Box on training residuals (transparency about training fit)
+    try:
+        from statsmodels.stats.diagnostic import acorr_ljungbox
+        if result.residuals is not None and len(result.residuals.dropna()) > 12:
+            lb = acorr_ljungbox(result.residuals.dropna(), lags=[10],
+                                  return_df=True)
+            ljung_p = float(lb["lb_pvalue"].iloc[0])
+        else:
+            ljung_p = None
+    except Exception:
+        ljung_p = None
+
+    def _fmt_date(d):
+        return d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+
+    return SimpleNamespace(
+        success=True, error_msg=None,
+        model_type=model_type.upper(),
+        config_summary=config_summary,
+        # Series for charting
+        fitted_in_sample=result.fitted,
+        oos_predictions=pred,
+        oos_actuals=actual,
+        # Model classes don't compute CI for the OOS window — match the report,
+        # which also doesn't show CI on its OOS overlay
+        oos_lower=None, oos_upper=None,
+        # Window meta
+        n_train=len(y) - test_size,
+        n_test=len(actual),
+        train_start=_fmt_date(y.index[0]),
+        train_end=_fmt_date(y.index[-(test_size + 1)]),
+        test_start=_fmt_date(actual.index[0]),
+        test_end=_fmt_date(actual.index[-1]),
+        # Metrics — straight from the model class (matches report exactly)
+        rmse=metrics.get("rmse", float("nan")),
+        mae=metrics.get("mae", float("nan")),
+        mape=metrics.get("mape", float("nan")),
+        r2=metrics.get("r2", float("nan")),
+        hit_rate=hit_rate,
+        # Coefficients / fit details for transparency
+        coefficients=result.coefficients,
+        ljung_box_p=ljung_p,
+        diagnostics=result.diagnostics or {},
+    )
 
 
 @st.cache_data(show_spinner="Fitting GARCH + risk metrics...")
@@ -1166,16 +1280,16 @@ with tab_attribution:
                 st.plotly_chart(fig, use_container_width=True)
 
 
-# ===== FORECASTS — Model Laboratory + Backtest + GARCH =====
+# ===== FORECASTS — Model Laboratory + OOS Test + GARCH =====
 with tab_forecast:
     if _overview_only:
         _render_overview_only_placeholder("Forecasts")
     else:
         st.markdown("### Forecast Laboratory")
         st.caption(
-            "Configure ARIMAX/ARDL parameters and inspect forecasts, walk-forward backtests, "
-            "and GARCH volatility/risk metrics. All operations are cached — first run "
-            "takes 5-30 seconds, subsequent views are instant."
+            "Configure ARIMAX/ARDL parameters and inspect forecasts, out-of-sample "
+            "tests, and GARCH volatility/risk metrics. All operations are cached — "
+            "first run takes 5-30 seconds, subsequent views are instant."
         )
 
         # Reset button
@@ -1422,103 +1536,263 @@ with tab_forecast:
                 pass
 
 
-        # ===== SECTION B: Walk-Forward Backtest =====
+        # ===== SECTION B: Out-of-Sample Test =====
         st.markdown("---")
-        st.markdown("#### Section B · Walk-Forward Backtest")
+        st.markdown("#### Section B · Out-of-Sample Test")
         st.caption(
-            "Re-train the model month-by-month going back N years, each time forecasting H months ahead. "
-            "Compare these rolling forecasts to actual prices to measure honest out-of-sample performance."
+            "Hold out the most recent N months as a test set. Fit the model on data "
+            "BEFORE that window, forecast forward through the test period using the "
+            "actual driver values for those months, and compare predictions to the "
+            "actuals you held out. Same code path the HTML report uses — numbers will "
+            "match exactly when the orders match."
         )
 
-        bt_c1, bt_c2, bt_c3, bt_c4 = st.columns(4)
-        with bt_c1:
-            bt_model = st.selectbox("Model", ["ARIMAX", "ARDL"], key="fc_bt_model")
-        with bt_c2:
-            bt_horizon = st.slider("Forecast horizon", 1, 12, 6, key="fc_bt_horizon",
-                                      help="Each fold forecasts this many months ahead.")
-        with bt_c3:
-            max_train = max(60, region.n_obs - bt_horizon - 12)
-            bt_min_train = st.slider("Min training months", 36, max_train,
-                                        min(60, max_train), step=12,
-                                        key="fc_bt_min_train",
-                                        help="Earliest training window starts here.")
-        with bt_c4:
-            bt_step = st.slider("Step (months)", 1, 6, 3, key="fc_bt_step",
-                                  help="Move the origin forward by this many months between folds.")
+        oos_c1, oos_c2, oos_c3 = st.columns([1, 1, 1])
+        with oos_c1:
+            oos_model = st.selectbox(
+                "Model", ["ARIMAX", "ARDL"], key="fc_oos_model",
+                help="Which model to evaluate. AR/d/MA/DL orders are taken from "
+                     "the Section A sliders above so you can iterate quickly."
+            )
+        with oos_c2:
+            # Cap test size sensibly — model classes need at least 12 obs of
+            # training data on top of the test window
+            oos_test_max = max(6, min(24, region.n_obs - 24))
+            oos_test_size = st.slider(
+                "Test window (months)", 3, oos_test_max,
+                min(12, oos_test_max), step=3, key="fc_oos_test_size",
+                help="How many of the most recent months to hold out. "
+                     "12 is the standard choice and matches the report's default."
+            )
+        with oos_c3:
+            st.metric("Training months",
+                       f"{region.n_obs - oos_test_size}",
+                       f"of {region.n_obs} total")
 
-        if st.button("Run walk-forward backtest", key="fc_bt_run",
-                       help="Click to run the backtest. Takes 30-90 seconds first time, instant on cache hit."):
-            bt = cached_backtest(region, region_pick, bt_model.lower(),
+        if st.button("Run out-of-sample test", key="fc_oos_run",
+                       help="Click to fit on training data and evaluate on the "
+                            "held-out window."):
+            oos = cached_oos_test(region, region_pick, oos_model.lower(),
                                     ar_arx, d_arx, ma_arx, dl_ardl,
-                                    bt_horizon, drivers_tuple,
-                                    bt_min_train, bt_step, file_mtime)
-            st.session_state["fc_bt_result"] = bt
+                                    oos_test_size, drivers_tuple, file_mtime)
+            st.session_state["fc_oos_result"] = oos
 
-        if "fc_bt_result" in st.session_state:
-            bt = st.session_state["fc_bt_result"]
-            if not bt.success:
-                st.error(f"Backtest failed: {bt.error_msg}")
+        if "fc_oos_result" in st.session_state:
+            oos = st.session_state["fc_oos_result"]
+            if not oos.success:
+                st.error(f"Out-of-sample test failed: {oos.error_msg}")
             else:
-                # Live interpretation
+                # Frame the result before showing metrics
+                if oos.hit_rate >= 60:
+                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** indicates "
+                                   "the model has genuine directional skill on this "
+                                   "window.")
+                elif oos.hit_rate >= 50:
+                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is only "
+                                   "modestly above coin-flip — directional skill is weak.")
+                else:
+                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is below "
+                                   "coin-flip — direction predictions failed on this window.")
+
+                st.info(
+                    f"**Honest assessment:** Trained on {oos.n_train} months "
+                    f"({oos.train_start} → {oos.train_end}), tested on {oos.n_test} "
+                    f"months ({oos.test_start} → {oos.test_end}). "
+                    f"Forecasts were on average **±{oos.mape:.1f}%** away from "
+                    f"actual prices. {skill_text}"
+                )
+
+                # Metrics row
+                om1, om2, om3, om4, om5 = st.columns(5)
+                om1.metric("RMSE", f"{currency} {oos.rmse:,.0f}/t")
+                om2.metric("MAE", f"{currency} {oos.mae:,.0f}/t")
+                om3.metric("MAPE", f"{oos.mape:.2f}%")
+                om4.metric("R² (out-of-sample)", f"{oos.r2:.3f}",
+                            help="Out-of-sample R². Can be negative if the forecast "
+                                 "is worse than predicting the test-set mean — that "
+                                 "indicates the model has no useful signal on this window.")
+                om5.metric("Hit rate (direction)", f"{oos.hit_rate:.0f}%",
+                            help="% of test months where forecast direction matched "
+                                 "actual direction (vs. previous value).")
+
+                # Ljung-Box on training residuals
+                if oos.ljung_box_p is not None:
+                    lb_status = ("✓ no residual autocorrelation" if oos.ljung_box_p > 0.05
+                                  else "⚠ residual autocorrelation present in training")
+                    st.caption(f"Training-residual Ljung-Box (10 lags): "
+                                f"p = {oos.ljung_box_p:.3f} → {lb_status}")
+
+                # Chart: actual + in-sample fit + OOS predictions
+                st.markdown("##### Predicted vs actual on held-out window")
+                fig = go.Figure()
+                target = region.y
+
+                # Full actual series (black)
+                fig.add_trace(go.Scatter(
+                    x=target.index, y=target.values, mode="lines",
+                    line=dict(color=COLORS["ink"], width=1.5),
+                    name="Actual",
+                ))
+
+                # In-sample fit (dotted accent — only training portion)
+                if oos.fitted_in_sample is not None:
+                    fig.add_trace(go.Scatter(
+                        x=oos.fitted_in_sample.index,
+                        y=oos.fitted_in_sample.values,
+                        mode="lines",
+                        line=dict(color=COLORS["accent"], width=1.3, dash="dot"),
+                        name="In-sample fit",
+                        opacity=0.7,
+                    ))
+
+                # OOS prediction line+markers (warning = orange, distinct)
+                fig.add_trace(go.Scatter(
+                    x=oos.oos_predictions.index, y=oos.oos_predictions.values,
+                    mode="lines+markers",
+                    line=dict(color=COLORS["warning"], width=2.5),
+                    marker=dict(size=7, symbol="diamond"),
+                    name="OOS prediction",
+                ))
+
+                # Vertical divider at train/test split. Use add_shape +
+                # add_annotation separately rather than add_vline(annotation_text=...)
+                # because the latter crashes on a Timestamp x with current plotly
+                # versions ("Addition/subtraction of integers and Timestamp is no
+                # longer supported").
+                if oos.fitted_in_sample is not None and len(oos.fitted_in_sample) > 0:
+                    split_x = oos.fitted_in_sample.index[-1]
+                else:
+                    split_x = oos.oos_predictions.index[0]
+                split_x_str = (split_x.strftime("%Y-%m-%d")
+                                if hasattr(split_x, "strftime") else str(split_x))
+                fig.add_shape(
+                    type="line", xref="x", yref="paper",
+                    x0=split_x_str, x1=split_x_str, y0=0, y1=1,
+                    line=dict(color=COLORS["muted"], width=1, dash="dash"),
+                )
+                fig.add_annotation(
+                    x=split_x_str, y=1.02, xref="x", yref="paper",
+                    text="train | test", showarrow=False,
+                    font=dict(color=COLORS["muted"], size=11),
+                )
+
+                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                                    yaxis_title=f"{currency}/t",
+                                    hovermode="x unified",
+                                    title=dict(
+                                        text=f"{oos.model_type} — {oos.config_summary} · "
+                                              f"trained on {oos.n_train}m, tested on {oos.n_test}m",
+                                        font=dict(size=13),
+                                    ))
+                style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Residuals table + chart
+                with st.expander("Test-period residuals (actual − predicted)"):
+                    resid = oos.oos_actuals.values - oos.oos_predictions.values
+                    resid_df = pd.DataFrame({
+                        "Date": [d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)
+                                  for d in oos.oos_predictions.index],
+                        f"Actual ({currency}/t)": oos.oos_actuals.values.round(0),
+                        f"Predicted ({currency}/t)": oos.oos_predictions.values.round(0),
+                        "Residual": resid.round(0),
+                        "% error": (resid / oos.oos_actuals.values * 100).round(2),
+                    })
+                    st.dataframe(resid_df, use_container_width=True, hide_index=True)
+
+                    rfig = go.Figure()
+                    rfig.add_trace(go.Bar(
+                        x=oos.oos_predictions.index, y=resid,
+                        marker_color=[COLORS["accent2"] if r >= 0 else COLORS["danger"]
+                                       for r in resid],
+                        name="Residual",
+                    ))
+                    rfig.add_hline(y=0, line_color=COLORS["muted"], line_width=1)
+                    rfig.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN, height=260,
+                                        yaxis_title=f"Residual ({currency}/t)",
+                                        title=dict(text="Residuals over test window",
+                                                    font=dict(size=12)))
+                    style_axes(rfig)
+                    st.plotly_chart(rfig, use_container_width=True)
+
+                # Coefficient table from the training-period fit
+                if oos.coefficients is not None:
+                    with st.expander("Training-period model coefficients"):
+                        cdf = oos.coefficients.copy().reset_index()
+                        # Round numeric columns
+                        for col in cdf.columns:
+                            if pd.api.types.is_numeric_dtype(cdf[col]):
+                                cdf[col] = cdf[col].round(4)
+                        # Add significance stars if p_value column exists
+                        if "p_value" in cdf.columns:
+                            cdf["sig"] = cdf["p_value"].apply(
+                                lambda p: "***" if pd.notna(p) and p < 0.001 else
+                                          "**" if pd.notna(p) and p < 0.01 else
+                                          "*" if pd.notna(p) and p < 0.05 else ""
+                            )
+                        st.dataframe(cdf, use_container_width=True, hide_index=True)
+                        st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001. "
+                                    "These coefficients are estimated on training data only.")
+
+                # Plain-English interpretation expander
+                interp_blocks = []
+                interp_blocks.append(
+                    f"**What this test shows.** The model was fit on the first "
+                    f"{oos.n_train} months of data ({oos.train_start} through "
+                    f"{oos.train_end}) and asked to forecast {oos.n_test} months "
+                    f"forward. Those forecasts were then compared to the actual "
+                    f"prices observed in {oos.test_start} – {oos.test_end}, which "
+                    f"the model never saw during fitting."
+                )
+                interp_blocks.append(
+                    f"**Magnitude error.** Average absolute miss was "
+                    f"{currency} {oos.mae:,.0f}/t (MAE), or {oos.mape:.1f}% "
+                    f"(MAPE). RMSE of {currency} {oos.rmse:,.0f}/t puts more weight "
+                    f"on the worst months — when RMSE is meaningfully larger than MAE, "
+                    f"a few forecasts missed badly while most were close."
+                )
+                if oos.r2 < 0:
+                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is negative — "
+                                "the model performed worse than simply predicting the "
+                                "test-set mean. This means the model's structure has "
+                                "no useful signal on this window; it's adding noise. "
+                                "Common causes: training period dynamics differ from "
+                                "the test period, or the test window is unusually flat.")
+                elif oos.r2 < 0.3:
+                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is low — "
+                                "the model captures only a small share of test-period "
+                                "variation. Treat point forecasts cautiously.")
+                elif oos.r2 < 0.7:
+                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is moderate — "
+                                "the model captures the broad shape of the test period "
+                                "but misses meaningful detail.")
+                else:
+                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is strong — "
+                                "the model tracks the test period well. Validate on "
+                                "additional windows before trusting it for live "
+                                "forecasting.")
+                interp_blocks.append(f"**Goodness of fit.** {r2_text}")
+                interp_blocks.append(
+                    f"**Direction.** {skill_text} Note that with only {oos.n_test} "
+                    f"comparisons, hit rate has wide confidence bands — repeat with "
+                    f"different test windows or models before generalising."
+                )
+                interp_blocks.append(
+                    "**Caveat.** This is a single train/test split. Performance on "
+                    "this specific window may not reflect average performance — try a "
+                    "different test size, swap models (ARIMAX vs ARDL), or remove "
+                    "drivers in Section A and re-run to compare."
+                )
                 try:
                     render_interpretation(
-                        narrator.narrate_backtest(bt, bt_model, bt_horizon, currency),
-                        label="📝 Backtest interpretation",
-                        settings_summary=f"{bt_model}, horizon={bt_horizon}m, "
-                                          f"min train={bt_min_train}m, step={bt_step}m, "
+                        interp_blocks,
+                        label="📝 Out-of-sample test interpretation",
+                        settings_summary=f"{oos.model_type} {oos.config_summary}, "
+                                          f"test window={oos.n_test}m, "
                                           f"{len(selected_drivers)} drivers",
                     )
                 except Exception:
                     pass
-
-                # Top-line metrics
-                tm1, tm2, tm3, tm4 = st.columns(4)
-                tm1.metric("Folds completed", bt.n_folds)
-                tm2.metric("Out-of-sample RMSE", f"{currency} {bt.overall_rmse:,.0f}/t")
-                tm3.metric("Out-of-sample MAPE", f"{bt.overall_mape:.2f}%")
-                tm4.metric("Hit rate (direction)", f"{bt.overall_hit_rate:.0f}%",
-                             help="% of forecasts that correctly predicted up vs down direction.")
-
-                # Honest assessment callout
-                st.info(
-                    f"**Honest assessment:** Over {bt.n_folds} historical retraining folds, this model's "
-                    f"forecasts were on average **±{bt.overall_mape:.1f}%** away from actual prices "
-                    f"in out-of-sample tests. It correctly predicted direction "
-                    f"**{bt.overall_hit_rate:.0f}%** of the time. "
-                    f"{'A hit rate well above 50% indicates genuine forecast skill.' if bt.overall_hit_rate > 60 else 'A hit rate near 50% suggests forecasts are no better than coin-flip on direction.'}"
-                )
-
-                # Metrics by horizon
-                st.markdown("##### Performance degradation by horizon")
-                st.dataframe(bt.metrics_by_horizon, use_container_width=True, hide_index=True)
-                st.caption("Forecast accuracy typically degrades at longer horizons. RMSE/MAPE rising with h is expected.")
-
-                # Rolling forecast vs actual chart
-                st.markdown("##### Rolling forecasts vs actual")
-                fig = go.Figure()
-                target = region.y
-                fig.add_trace(go.Scatter(
-                    x=target.index, y=target.values, mode="lines",
-                    line=dict(color=COLORS["ink"], width=1.5), name="Actual"
-                ))
-                # Plot forecasts at horizon = bt_horizon (terminal forecasts only for clarity)
-                terminal = bt.fold_results[bt.fold_results["h_months"] == bt_horizon]
-                fig.add_trace(go.Scatter(
-                    x=terminal["target_date"], y=terminal["forecast"],
-                    mode="markers",
-                    marker=dict(color=COLORS["accent"], size=6, opacity=0.7,
-                                  symbol="diamond"),
-                    name=f"{bt_horizon}m-ahead forecast (each origin)",
-                ))
-                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
-                                    yaxis_title=f"{currency}/t",
-                                    hovermode="x unified")
-                style_axes(fig)
-                st.plotly_chart(fig, use_container_width=True)
-
-                with st.expander("All fold results"):
-                    st.dataframe(bt.fold_results.round(2), use_container_width=True,
-                                  hide_index=True)
 
 
         # ===== SECTION C: GARCH Volatility + Risk =====

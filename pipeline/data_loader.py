@@ -50,6 +50,7 @@ class RegionData:
             "date_start": str(self.df.index.min().date()),
             "date_end": str(self.df.index.max().date()),
             "missing_values": int(self.df.isna().sum().sum()),
+            "overview_only": self.overview_only,
         }
 
 
