@@ -25,6 +25,7 @@ class RegionData:
     spread_config: Dict                          # iron_ore + hcc cols & weights
     skipped_columns: List[str] = field(default_factory=list)
     overview_only: bool = False                  # True = only Overview tab in dashboard
+    liquidity_cols: List[str] = field(default_factory=list)  # liquidity columns (base + derived), present only if region has liquidity block
 
     @property
     def y(self) -> pd.Series:
@@ -51,6 +52,7 @@ class RegionData:
             "date_end": str(self.df.index.max().date()),
             "missing_values": int(self.df.isna().sum().sum()),
             "overview_only": self.overview_only,
+            "liquidity_cols": list(self.liquidity_cols),
         }
 
 
@@ -125,6 +127,57 @@ def _load_one_region(name: str, region_cfg: dict, file_path: str) -> RegionData:
             available=list(df.columns),
         )
 
+    # --- LIQUIDITY MODULE -----------------------------------------------------
+    # If a `liquidity:` block exists for this region, compute derived series
+    # (WACR_Spread, Stress_Index, regime labels, etc.) and stamp them onto the
+    # dataframe as additional columns. They can then be selected as drivers via
+    # the standard `drivers:` config or referenced by the dashboard's Liquidity
+    # tab. Derived columns are skipped silently if the required raw inputs are
+    # missing — non-liquidity regions are unaffected.
+    liquidity_cols: List[str] = []
+    liq_cfg = region_cfg.get("liquidity")
+    if liq_cfg:
+        try:
+            from pipeline.liquidity import (
+                compute_derived_series,
+                classify_liquidity_regime,
+                compute_stress_index,
+                detect_policy_regime,
+            )
+        except Exception as exc:
+            raise _friendly_error(
+                f"Failed to import pipeline.liquidity module: {exc}"
+            )
+
+        base_cols = liq_cfg.get("base_columns", [])
+        present = [c for c in base_cols if c in df.columns]
+        missing = [c for c in base_cols if c not in df.columns]
+        if missing:
+            raise _friendly_error(
+                f"Liquidity base columns not in sheet '{sheet}': {missing}",
+                available=list(df.columns),
+            )
+
+        df = compute_derived_series(df)
+        if "WACR_Spread" in df.columns:
+            df["Liquidity_Regime"] = classify_liquidity_regime(
+                df["WACR_Spread"],
+                method=liq_cfg.get("regime_method", "std_band"),
+                band_width=float(liq_cfg.get("regime_band_width", 0.5)),
+            )
+            df["Stress_Index"] = compute_stress_index(df)
+        if "Repo_Rate" in df.columns:
+            df["Policy_Regime"] = detect_policy_regime(
+                df["Repo_Rate"],
+                lookback_months=int(liq_cfg.get("policy_lookback_months", 6)),
+            )
+
+        # All columns that are part of the liquidity universe
+        derived = ["WACR_Spread", "GSec_Repo_Spread", "Bank_Credit_YoY",
+                   "Repo_6M_Change", "Stress_Index", "Liquidity_Regime",
+                   "Policy_Regime"]
+        liquidity_cols = present + [c for c in derived if c in df.columns]
+
     # Drivers
     driver_cfg = region_cfg.get("drivers", "auto")
     skipped = []
@@ -133,6 +186,25 @@ def _load_one_region(name: str, region_cfg: dict, file_path: str) -> RegionData:
         drivers = [c for c in numeric_cols if c != target]
         # Identify non-numeric columns we skipped (e.g., notes columns)
         skipped = [c for c in df.columns if c != target and c not in drivers]
+
+        # If a liquidity block is configured, EXCLUDE all liquidity-related
+        # columns from the auto driver list and re-add only those nominated in
+        # liquidity.driver_columns. This avoids the multicollinearity that
+        # would otherwise arise from including WACR + Repo_Rate + WACR_Spread
+        # (which is just WACR − Repo_Rate) all at once.
+        if liq_cfg:
+            liq_universe = set(liquidity_cols)
+            drivers = [c for c in drivers if c not in liq_universe]
+            nominated = liq_cfg.get("driver_columns", [])
+            for c in nominated:
+                if c not in df.columns:
+                    raise _friendly_error(
+                        f"Liquidity driver_column '{c}' not present after "
+                        f"derived-series computation for region '{name}'.",
+                        available=list(df.columns),
+                    )
+                if c not in drivers:
+                    drivers.append(c)
     elif isinstance(driver_cfg, list):
         missing = [c for c in driver_cfg if c not in df.columns]
         if missing:
@@ -173,6 +245,7 @@ def _load_one_region(name: str, region_cfg: dict, file_path: str) -> RegionData:
         spread_config=region_cfg.get("spread", {}),
         skipped_columns=skipped,
         overview_only=overview_only,
+        liquidity_cols=liquidity_cols,
     )
 
 

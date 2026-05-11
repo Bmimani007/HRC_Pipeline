@@ -49,10 +49,15 @@ def adf_table(df: pd.DataFrame, significance: float = 0.05) -> pd.DataFrame:
 def vif_table(X: pd.DataFrame) -> pd.DataFrame:
     """Variance Inflation Factor — flags multicollinearity. VIF > 10 = severe."""
     from statsmodels.stats.outliers_influence import variance_inflation_factor
+    empty = pd.DataFrame(columns=["variable", "vif", "severity"])
+    if X is None or X.shape[1] == 0:
+        return empty
     Xc = X.dropna().copy()
     if len(Xc) < len(Xc.columns) + 5:
-        return pd.DataFrame(columns=["variable", "vif", "severity"])
+        return empty
     Xc = Xc.replace([np.inf, -np.inf], np.nan).dropna()
+    if Xc.shape[1] == 0:
+        return empty
     Xc_with_const = Xc.assign(_const=1.0)
     rows = []
     for i, col in enumerate(Xc.columns):
@@ -64,6 +69,8 @@ def vif_table(X: pd.DataFrame) -> pd.DataFrame:
                "moderate" if v > 5 else
                "low")
         rows.append({"variable": col, "vif": float(v), "severity": sev})
+    if not rows:
+        return empty
     return pd.DataFrame(rows).sort_values("vif", ascending=False).reset_index(drop=True)
 
 

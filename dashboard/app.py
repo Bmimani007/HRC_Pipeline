@@ -887,10 +887,20 @@ filter_key = (
 # Show all tabs always; for overview-only regions (e.g., US without drivers),
 # the tab body checks _overview_only and shows a friendly placeholder.
 _overview_only = getattr(region, "overview_only", False)
+_has_liquidity = bool(getattr(region, "liquidity_cols", []))
 
-tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro, tab_glossary = st.tabs([
-    "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar", "📖 Glossary"
-])
+# The Liquidity tab is region-specific: it appears only when the region has a
+# liquidity block configured in config.yaml (currently India only). This keeps
+# the tab strip uncluttered for regions where it wouldn't apply.
+if _has_liquidity:
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro, tab_liquidity, tab_glossary = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar", "Liquidity", "📖 Glossary"
+    ])
+else:
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro, tab_glossary = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar", "📖 Glossary"
+    ])
+    tab_liquidity = None  # sentinel; tab body guards on this
 
 
 def _render_overview_only_placeholder(tab_name: str):
@@ -1360,610 +1370,611 @@ with tab_forecast:
             "Drivers to include in model",
             options=all_drivers,
             default=all_drivers,
-            key="fc_drivers",
+            key=f"fc_drivers_{region.name}",
             help="Uncheck a driver to fit the model without it. Useful for testing each driver's contribution."
         )
 
-        if len(selected_drivers) == 0:
+        _forecast_can_run = len(selected_drivers) > 0
+        if not _forecast_can_run:
             st.warning("Select at least one driver to fit the model.")
-            st.stop()
 
-        # Fit + display the chosen model(s)
-        drivers_tuple = tuple(sorted(selected_drivers))
+        if _forecast_can_run:
+            # Fit + display the chosen model(s)
+            drivers_tuple = tuple(sorted(selected_drivers))
 
-        def _render_fit(fit_result, label, color):
-            """Render one model fit's outputs."""
-            if not fit_result.success:
-                st.error(f"❌ **{label} failed**: {fit_result.error_msg}")
-                st.caption(f"Configuration: {fit_result.config_summary}")
-                return
+            def _render_fit(fit_result, label, color):
+                """Render one model fit's outputs."""
+                if not fit_result.success:
+                    st.error(f"❌ **{label} failed**: {fit_result.error_msg}")
+                    st.caption(f"Configuration: {fit_result.config_summary}")
+                    return
 
-            st.success(f"✓ **{label}** — {fit_result.config_summary}")
-
-            # Metrics row
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("RMSE", f"{currency} {fit_result.rmse:,.0f}/t")
-            m2.metric("MAPE", f"{fit_result.mape:.2f}%")
-            m3.metric("R²", f"{fit_result.r2:.3f}")
-            m4.metric("AIC", f"{fit_result.aic:.0f}")
-            m5.metric("BIC", f"{fit_result.bic:.0f}")
-
-            # Ljung-Box residual diagnostic
-            if fit_result.ljung_box_p is not None:
-                lb_status = "✓ no autocorrelation" if fit_result.ljung_box_p > 0.05 else "⚠ residual autocorrelation present"
-                st.caption(f"Ljung-Box test (10 lags): p = {fit_result.ljung_box_p:.3f} → {lb_status}")
-
-            # Forecast chart
-            target = region.y
-            fig = go.Figure()
-            # In-sample fit
-            fig.add_trace(go.Scatter(
-                x=target.index, y=target.values, mode="lines",
-                line=dict(color=COLORS["ink"], width=1.5),
-                name="Actual"
-            ))
-            if fit_result.fitted_in_sample is not None:
-                fig.add_trace(go.Scatter(
-                    x=fit_result.fitted_in_sample.index,
-                    y=fit_result.fitted_in_sample.values,
-                    mode="lines",
-                    line=dict(color=color, width=1.5, dash="dot"),
-                    name="In-sample fit"
-                ))
-            # Forecast + 95% CI
-            if fit_result.forecast_mean is not None:
-                fig.add_trace(go.Scatter(
-                    x=fit_result.forecast_upper_95.index,
-                    y=fit_result.forecast_upper_95.values,
-                    mode="lines", line=dict(width=0), showlegend=False,
-                    hoverinfo="skip"
-                ))
-                fig.add_trace(go.Scatter(
-                    x=fit_result.forecast_lower_95.index,
-                    y=fit_result.forecast_lower_95.values,
-                    mode="lines", line=dict(width=0),
-                    fill="tonexty",
-                    fillcolor=f"rgba{tuple(list(_hex_to_rgb(color)) + [0.2])}",
-                    name="95% CI"
-                ))
-                fig.add_trace(go.Scatter(
-                    x=fit_result.forecast_mean.index,
-                    y=fit_result.forecast_mean.values,
-                    mode="lines",
-                    line=dict(color=color, width=2.5),
-                    name=f"Forecast ({forecast_horizon}m)"
-                ))
-            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
-                                yaxis_title=f"{currency}/t",
-                                title=dict(text=f"{label} forecast", font=dict(size=13)))
-            style_axes(fig)
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Coefficient table
-            with st.expander("Coefficient table"):
-                if fit_result.coefficients is not None:
-                    cdf = fit_result.coefficients.copy()
-                    cdf["coef"] = cdf["coef"].round(4)
-                    cdf["std_err"] = cdf["std_err"].round(4)
-                    cdf["p_value"] = cdf["p_value"].round(4)
-                    cdf["sig"] = cdf["p_value"].apply(
-                        lambda p: "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
-                    )
-                    st.dataframe(cdf, use_container_width=True, hide_index=True)
-                    st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001")
-
-        # Helper for color blending
-        def _hex_to_rgb(hex_color):
-            h = hex_color.lstrip("#")
-            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-        if model_choice == "ARIMAX":
-            fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
-                                      forecast_horizon, drivers_tuple, file_mtime)
-            _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
-            try:
-                render_interpretation(
-                    narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency),
-                    label="📝 ARIMAX interpretation",
-                    settings_summary=f"AR={ar_arx}, d={d_arx}, MA={ma_arx}, "
-                                      f"horizon={forecast_horizon}m, "
-                                      f"{len(selected_drivers)} drivers",
-                )
-            except Exception:
-                pass
-        elif model_choice == "ARDL":
-            fit_ardl = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
-                                     forecast_horizon, drivers_tuple, file_mtime)
-            _render_fit(fit_ardl, "ARDL", COLORS["accent2"])
-            try:
-                render_interpretation(
-                    narrator.narrate_model_fit(fit_ardl, "ARDL", selected_drivers, currency),
-                    label="📝 ARDL interpretation",
-                    settings_summary=f"AR={ar_ardl}, DL={dl_ardl}, "
-                                      f"horizon={forecast_horizon}m, "
-                                      f"{len(selected_drivers)} drivers",
-                )
-            except Exception:
-                pass
-        else:  # Both (compare)
-            fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
-                                      forecast_horizon, drivers_tuple, file_mtime)
-            fit_ardl_r = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
-                                       forecast_horizon, drivers_tuple, file_mtime)
-
-            # Two-column comparison
-            st.markdown("##### Side-by-side comparison")
-            comp_data = []
-            for fit_res, name in [(fit_arx, "ARIMAX"), (fit_ardl_r, "ARDL")]:
-                if fit_res.success:
-                    comp_data.append({
-                        "Model": name,
-                        "RMSE": f"{fit_res.rmse:,.0f}",
-                        "MAPE %": f"{fit_res.mape:.2f}",
-                        "R²": f"{fit_res.r2:.3f}",
-                        "AIC": f"{fit_res.aic:.0f}",
-                        "BIC": f"{fit_res.bic:.0f}",
-                        "Status": "✓",
-                    })
-                else:
-                    comp_data.append({
-                        "Model": name, "RMSE": "—", "MAPE %": "—", "R²": "—",
-                        "AIC": "—", "BIC": "—", "Status": "❌",
-                    })
-            st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
-
-            # Render each in collapsible expanders to keep things tidy
-            with st.expander("ARIMAX details", expanded=True):
-                _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
-            with st.expander("ARDL details"):
-                _render_fit(fit_ardl_r, "ARDL", COLORS["accent2"])
-
-            # Combined interpretation comparing both
-            try:
-                both_blocks = []
-                both_blocks.extend(narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency))
-                both_blocks.append("<hr style='border: 0; border-top: 1px dashed #E5E9F0; margin: 16px 0;'>")
-                both_blocks.extend(narrator.narrate_model_fit(fit_ardl_r, "ARDL", selected_drivers, currency))
-                render_interpretation(
-                    both_blocks,
-                    label="📝 Combined ARIMAX + ARDL interpretation",
-                    settings_summary=f"ARIMAX({ar_arx},{d_arx},{ma_arx}) vs "
-                                      f"ARDL(ar={ar_ardl}, dl={dl_ardl}), "
-                                      f"horizon={forecast_horizon}m, "
-                                      f"{len(selected_drivers)} drivers",
-                )
-            except Exception:
-                pass
-
-
-        # ===== SECTION B: Out-of-Sample Test =====
-        st.markdown("---")
-        st.markdown("#### Section B · Out-of-Sample Test")
-        st.caption(
-            "Hold out the most recent N months as a test set. Fit the model on data "
-            "BEFORE that window, forecast forward through the test period using the "
-            "actual driver values for those months, and compare predictions to the "
-            "actuals you held out. Same code path the HTML report uses — numbers will "
-            "match exactly when the orders match."
-        )
-
-        oos_c1, oos_c2, oos_c3 = st.columns([1, 1, 1])
-        with oos_c1:
-            oos_model = st.selectbox(
-                "Model", ["ARIMAX", "ARDL"], key="fc_oos_model",
-                help="Which model to evaluate. AR/d/MA/DL orders are taken from "
-                     "the Section A sliders above so you can iterate quickly."
-            )
-        with oos_c2:
-            # Cap test size sensibly — model classes need at least 12 obs of
-            # training data on top of the test window
-            oos_test_max = max(6, min(24, region.n_obs - 24))
-            oos_test_size = st.slider(
-                "Test window (months)", 3, oos_test_max,
-                min(12, oos_test_max), step=3, key="fc_oos_test_size",
-                help="How many of the most recent months to hold out. "
-                     "12 is the standard choice and matches the report's default."
-            )
-        with oos_c3:
-            st.metric("Training months",
-                       f"{region.n_obs - oos_test_size}",
-                       f"of {region.n_obs} total")
-
-        if st.button("Run out-of-sample test", key="fc_oos_run",
-                       help="Click to fit on training data and evaluate on the "
-                            "held-out window."):
-            oos = cached_oos_test(region, region_pick, oos_model.lower(),
-                                    ar_arx, d_arx, ma_arx, dl_ardl,
-                                    oos_test_size, drivers_tuple, file_mtime)
-            st.session_state["fc_oos_result"] = oos
-
-        if "fc_oos_result" in st.session_state:
-            oos = st.session_state["fc_oos_result"]
-            if not oos.success:
-                st.error(f"Out-of-sample test failed: {oos.error_msg}")
-            else:
-                # Frame the result before showing metrics
-                if oos.hit_rate >= 60:
-                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** indicates "
-                                   "the model has genuine directional skill on this "
-                                   "window.")
-                elif oos.hit_rate >= 50:
-                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is only "
-                                   "modestly above coin-flip — directional skill is weak.")
-                else:
-                    skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is below "
-                                   "coin-flip — direction predictions failed on this window.")
-
-                st.info(
-                    f"**Honest assessment:** Trained on {oos.n_train} months "
-                    f"({oos.train_start} → {oos.train_end}), tested on {oos.n_test} "
-                    f"months ({oos.test_start} → {oos.test_end}). "
-                    f"Forecasts were on average **±{oos.mape:.1f}%** away from "
-                    f"actual prices. {skill_text}"
-                )
+                st.success(f"✓ **{label}** — {fit_result.config_summary}")
 
                 # Metrics row
-                om1, om2, om3, om4, om5 = st.columns(5)
-                om1.metric("RMSE", f"{currency} {oos.rmse:,.0f}/t")
-                om2.metric("MAE", f"{currency} {oos.mae:,.0f}/t")
-                om3.metric("MAPE", f"{oos.mape:.2f}%")
-                om4.metric("R² (out-of-sample)", f"{oos.r2:.3f}",
-                            help="Out-of-sample R². Can be negative if the forecast "
-                                 "is worse than predicting the test-set mean — that "
-                                 "indicates the model has no useful signal on this window.")
-                om5.metric("Hit rate (direction)", f"{oos.hit_rate:.0f}%",
-                            help="% of test months where forecast direction matched "
-                                 "actual direction (vs. previous value).")
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("RMSE", f"{currency} {fit_result.rmse:,.0f}/t")
+                m2.metric("MAPE", f"{fit_result.mape:.2f}%")
+                m3.metric("R²", f"{fit_result.r2:.3f}")
+                m4.metric("AIC", f"{fit_result.aic:.0f}")
+                m5.metric("BIC", f"{fit_result.bic:.0f}")
 
-                # Ljung-Box on training residuals
-                if oos.ljung_box_p is not None:
-                    lb_status = ("✓ no residual autocorrelation" if oos.ljung_box_p > 0.05
-                                  else "⚠ residual autocorrelation present in training")
-                    st.caption(f"Training-residual Ljung-Box (10 lags): "
-                                f"p = {oos.ljung_box_p:.3f} → {lb_status}")
+                # Ljung-Box residual diagnostic
+                if fit_result.ljung_box_p is not None:
+                    lb_status = "✓ no autocorrelation" if fit_result.ljung_box_p > 0.05 else "⚠ residual autocorrelation present"
+                    st.caption(f"Ljung-Box test (10 lags): p = {fit_result.ljung_box_p:.3f} → {lb_status}")
 
-                # Chart: actual + in-sample fit + OOS predictions
-                st.markdown("##### Predicted vs actual on held-out window")
-                fig = go.Figure()
+                # Forecast chart
                 target = region.y
-
-                # Full actual series (black)
+                fig = go.Figure()
+                # In-sample fit
                 fig.add_trace(go.Scatter(
                     x=target.index, y=target.values, mode="lines",
                     line=dict(color=COLORS["ink"], width=1.5),
-                    name="Actual",
+                    name="Actual"
                 ))
-
-                # In-sample fit (dotted accent — only training portion)
-                if oos.fitted_in_sample is not None:
+                if fit_result.fitted_in_sample is not None:
                     fig.add_trace(go.Scatter(
-                        x=oos.fitted_in_sample.index,
-                        y=oos.fitted_in_sample.values,
+                        x=fit_result.fitted_in_sample.index,
+                        y=fit_result.fitted_in_sample.values,
                         mode="lines",
-                        line=dict(color=COLORS["accent"], width=1.3, dash="dot"),
-                        name="In-sample fit",
-                        opacity=0.7,
+                        line=dict(color=color, width=1.5, dash="dot"),
+                        name="In-sample fit"
                     ))
-
-                # OOS prediction line+markers (warning = orange, distinct)
-                fig.add_trace(go.Scatter(
-                    x=oos.oos_predictions.index, y=oos.oos_predictions.values,
-                    mode="lines+markers",
-                    line=dict(color=COLORS["warning"], width=2.5),
-                    marker=dict(size=7, symbol="diamond"),
-                    name="OOS prediction",
-                ))
-
-                # Vertical divider at train/test split. Use add_shape +
-                # add_annotation separately rather than add_vline(annotation_text=...)
-                # because the latter crashes on a Timestamp x with current plotly
-                # versions ("Addition/subtraction of integers and Timestamp is no
-                # longer supported").
-                if oos.fitted_in_sample is not None and len(oos.fitted_in_sample) > 0:
-                    split_x = oos.fitted_in_sample.index[-1]
-                else:
-                    split_x = oos.oos_predictions.index[0]
-                split_x_str = (split_x.strftime("%Y-%m-%d")
-                                if hasattr(split_x, "strftime") else str(split_x))
-                fig.add_shape(
-                    type="line", xref="x", yref="paper",
-                    x0=split_x_str, x1=split_x_str, y0=0, y1=1,
-                    line=dict(color=COLORS["muted"], width=1, dash="dash"),
-                )
-                fig.add_annotation(
-                    x=split_x_str, y=1.02, xref="x", yref="paper",
-                    text="train | test", showarrow=False,
-                    font=dict(color=COLORS["muted"], size=11),
-                )
-
-                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                # Forecast + 95% CI
+                if fit_result.forecast_mean is not None:
+                    fig.add_trace(go.Scatter(
+                        x=fit_result.forecast_upper_95.index,
+                        y=fit_result.forecast_upper_95.values,
+                        mode="lines", line=dict(width=0), showlegend=False,
+                        hoverinfo="skip"
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=fit_result.forecast_lower_95.index,
+                        y=fit_result.forecast_lower_95.values,
+                        mode="lines", line=dict(width=0),
+                        fill="tonexty",
+                        fillcolor=f"rgba{tuple(list(_hex_to_rgb(color)) + [0.2])}",
+                        name="95% CI"
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=fit_result.forecast_mean.index,
+                        y=fit_result.forecast_mean.values,
+                        mode="lines",
+                        line=dict(color=color, width=2.5),
+                        name=f"Forecast ({forecast_horizon}m)"
+                    ))
+                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
                                     yaxis_title=f"{currency}/t",
-                                    hovermode="x unified",
-                                    title=dict(
-                                        text=f"{oos.model_type} — {oos.config_summary} · "
-                                              f"trained on {oos.n_train}m, tested on {oos.n_test}m",
-                                        font=dict(size=13),
-                                    ))
+                                    title=dict(text=f"{label} forecast", font=dict(size=13)))
                 style_axes(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Residuals table + chart
-                with st.expander("Test-period residuals (actual − predicted)"):
-                    resid = oos.oos_actuals.values - oos.oos_predictions.values
-                    resid_df = pd.DataFrame({
-                        "Date": [d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)
-                                  for d in oos.oos_predictions.index],
-                        f"Actual ({currency}/t)": oos.oos_actuals.values.round(0),
-                        f"Predicted ({currency}/t)": oos.oos_predictions.values.round(0),
-                        "Residual": resid.round(0),
-                        "% error": (resid / oos.oos_actuals.values * 100).round(2),
-                    })
-                    st.dataframe(resid_df, use_container_width=True, hide_index=True)
-
-                    rfig = go.Figure()
-                    rfig.add_trace(go.Bar(
-                        x=oos.oos_predictions.index, y=resid,
-                        marker_color=[COLORS["accent2"] if r >= 0 else COLORS["danger"]
-                                       for r in resid],
-                        name="Residual",
-                    ))
-                    rfig.add_hline(y=0, line_color=COLORS["muted"], line_width=1)
-                    rfig.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN, height=260,
-                                        yaxis_title=f"Residual ({currency}/t)",
-                                        title=dict(text="Residuals over test window",
-                                                    font=dict(size=12)))
-                    style_axes(rfig)
-                    st.plotly_chart(rfig, use_container_width=True)
-
-                # Coefficient table from the training-period fit
-                if oos.coefficients is not None:
-                    with st.expander("Training-period model coefficients"):
-                        cdf = oos.coefficients.copy().reset_index()
-                        # Round numeric columns
-                        for col in cdf.columns:
-                            if pd.api.types.is_numeric_dtype(cdf[col]):
-                                cdf[col] = cdf[col].round(4)
-                        # Add significance stars if p_value column exists
-                        if "p_value" in cdf.columns:
-                            cdf["sig"] = cdf["p_value"].apply(
-                                lambda p: "***" if pd.notna(p) and p < 0.001 else
-                                          "**" if pd.notna(p) and p < 0.01 else
-                                          "*" if pd.notna(p) and p < 0.05 else ""
-                            )
+                # Coefficient table
+                with st.expander("Coefficient table"):
+                    if fit_result.coefficients is not None:
+                        cdf = fit_result.coefficients.copy()
+                        cdf["coef"] = cdf["coef"].round(4)
+                        cdf["std_err"] = cdf["std_err"].round(4)
+                        cdf["p_value"] = cdf["p_value"].round(4)
+                        cdf["sig"] = cdf["p_value"].apply(
+                            lambda p: "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
+                        )
                         st.dataframe(cdf, use_container_width=True, hide_index=True)
-                        st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001. "
-                                    "These coefficients are estimated on training data only.")
+                        st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001")
 
-                # Plain-English interpretation expander
-                interp_blocks = []
-                interp_blocks.append(
-                    f"**What this test shows.** The model was fit on the first "
-                    f"{oos.n_train} months of data ({oos.train_start} through "
-                    f"{oos.train_end}) and asked to forecast {oos.n_test} months "
-                    f"forward. Those forecasts were then compared to the actual "
-                    f"prices observed in {oos.test_start} – {oos.test_end}, which "
-                    f"the model never saw during fitting."
-                )
-                interp_blocks.append(
-                    f"**Magnitude error.** Average absolute miss was "
-                    f"{currency} {oos.mae:,.0f}/t (MAE), or {oos.mape:.1f}% "
-                    f"(MAPE). RMSE of {currency} {oos.rmse:,.0f}/t puts more weight "
-                    f"on the worst months — when RMSE is meaningfully larger than MAE, "
-                    f"a few forecasts missed badly while most were close."
-                )
-                if oos.r2 < 0:
-                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is negative — "
-                                "the model performed worse than simply predicting the "
-                                "test-set mean. This means the model's structure has "
-                                "no useful signal on this window; it's adding noise. "
-                                "Common causes: training period dynamics differ from "
-                                "the test period, or the test window is unusually flat.")
-                elif oos.r2 < 0.3:
-                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is low — "
-                                "the model captures only a small share of test-period "
-                                "variation. Treat point forecasts cautiously.")
-                elif oos.r2 < 0.7:
-                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is moderate — "
-                                "the model captures the broad shape of the test period "
-                                "but misses meaningful detail.")
-                else:
-                    r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is strong — "
-                                "the model tracks the test period well. Validate on "
-                                "additional windows before trusting it for live "
-                                "forecasting.")
-                interp_blocks.append(f"**Goodness of fit.** {r2_text}")
-                interp_blocks.append(
-                    f"**Direction.** {skill_text} Note that with only {oos.n_test} "
-                    f"comparisons, hit rate has wide confidence bands — repeat with "
-                    f"different test windows or models before generalising."
-                )
-                interp_blocks.append(
-                    "**Caveat.** This is a single train/test split. Performance on "
-                    "this specific window may not reflect average performance — try a "
-                    "different test size, swap models (ARIMAX vs ARDL), or remove "
-                    "drivers in Section A and re-run to compare."
-                )
+            # Helper for color blending
+            def _hex_to_rgb(hex_color):
+                h = hex_color.lstrip("#")
+                return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+            if model_choice == "ARIMAX":
+                fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
+                                          forecast_horizon, drivers_tuple, file_mtime)
+                _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
                 try:
                     render_interpretation(
-                        interp_blocks,
-                        label="📝 Out-of-sample test interpretation",
-                        settings_summary=f"{oos.model_type} {oos.config_summary}, "
-                                          f"test window={oos.n_test}m, "
+                        narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency),
+                        label="📝 ARIMAX interpretation",
+                        settings_summary=f"AR={ar_arx}, d={d_arx}, MA={ma_arx}, "
+                                          f"horizon={forecast_horizon}m, "
+                                          f"{len(selected_drivers)} drivers",
+                    )
+                except Exception:
+                    pass
+            elif model_choice == "ARDL":
+                fit_ardl = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
+                                         forecast_horizon, drivers_tuple, file_mtime)
+                _render_fit(fit_ardl, "ARDL", COLORS["accent2"])
+                try:
+                    render_interpretation(
+                        narrator.narrate_model_fit(fit_ardl, "ARDL", selected_drivers, currency),
+                        label="📝 ARDL interpretation",
+                        settings_summary=f"AR={ar_ardl}, DL={dl_ardl}, "
+                                          f"horizon={forecast_horizon}m, "
+                                          f"{len(selected_drivers)} drivers",
+                    )
+                except Exception:
+                    pass
+            else:  # Both (compare)
+                fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
+                                          forecast_horizon, drivers_tuple, file_mtime)
+                fit_ardl_r = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
+                                           forecast_horizon, drivers_tuple, file_mtime)
+
+                # Two-column comparison
+                st.markdown("##### Side-by-side comparison")
+                comp_data = []
+                for fit_res, name in [(fit_arx, "ARIMAX"), (fit_ardl_r, "ARDL")]:
+                    if fit_res.success:
+                        comp_data.append({
+                            "Model": name,
+                            "RMSE": f"{fit_res.rmse:,.0f}",
+                            "MAPE %": f"{fit_res.mape:.2f}",
+                            "R²": f"{fit_res.r2:.3f}",
+                            "AIC": f"{fit_res.aic:.0f}",
+                            "BIC": f"{fit_res.bic:.0f}",
+                            "Status": "✓",
+                        })
+                    else:
+                        comp_data.append({
+                            "Model": name, "RMSE": "—", "MAPE %": "—", "R²": "—",
+                            "AIC": "—", "BIC": "—", "Status": "❌",
+                        })
+                st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+
+                # Render each in collapsible expanders to keep things tidy
+                with st.expander("ARIMAX details", expanded=True):
+                    _render_fit(fit_arx, "ARIMAX", COLORS["accent"])
+                with st.expander("ARDL details"):
+                    _render_fit(fit_ardl_r, "ARDL", COLORS["accent2"])
+
+                # Combined interpretation comparing both
+                try:
+                    both_blocks = []
+                    both_blocks.extend(narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency))
+                    both_blocks.append("<hr style='border: 0; border-top: 1px dashed #E5E9F0; margin: 16px 0;'>")
+                    both_blocks.extend(narrator.narrate_model_fit(fit_ardl_r, "ARDL", selected_drivers, currency))
+                    render_interpretation(
+                        both_blocks,
+                        label="📝 Combined ARIMAX + ARDL interpretation",
+                        settings_summary=f"ARIMAX({ar_arx},{d_arx},{ma_arx}) vs "
+                                          f"ARDL(ar={ar_ardl}, dl={dl_ardl}), "
+                                          f"horizon={forecast_horizon}m, "
                                           f"{len(selected_drivers)} drivers",
                     )
                 except Exception:
                     pass
 
 
-        # ===== SECTION C: GARCH Volatility + Risk =====
-        st.markdown("---")
-        st.markdown("#### Section C · GARCH Volatility & Risk Metrics")
-        st.caption(
-            "GARCH(1,1) model fitted on log-returns. Provides conditional volatility forecast, "
-            "fan chart on point forecast, VaR/Expected Shortfall, and current volatility regime classification."
-        )
-
-        g = cached_garch(region, region_pick, forecast_horizon, file_mtime)
-
-        if not g.success:
-            st.error(f"GARCH fit failed: {g.error_msg}")
-        else:
-            # Live interpretation
-            try:
-                render_interpretation(
-                    narrator.narrate_garch_dashboard(g, currency,
-                                                        latest_price=float(region.y.iloc[-1])),
-                    label="📝 GARCH / risk interpretation",
-                    settings_summary=f"Region: {region_pick.title()}, "
-                                      f"Forecast horizon: {forecast_horizon}m",
-                )
-            except Exception:
-                pass
-
-            # Top-line GARCH metrics
-            gm1, gm2, gm3, gm4 = st.columns(4)
-            gm1.metric("Persistence (α+β)", f"{g.persistence:.3f}",
-                         help="Higher = volatility shocks decay slowly. Values near 1 indicate near-permanent shocks.")
-            gm2.metric("Half-life", f"{g.half_life_months:.1f}m" if g.half_life_months and not np.isinf(g.half_life_months) else "∞",
-                         help="Months until a vol shock decays to half its initial size.")
-            gm3.metric("Current vol percentile", f"P{g.vol_percentile:.0f}")
-            regime_emoji = {"low": "🟢", "normal": "⚪", "elevated": "🟠", "extreme": "🔴"}.get(g.regime_label, "⚪")
-            gm4.metric("Volatility regime", f"{regime_emoji} {g.regime_label.upper()}")
-
-            # ----- View 1: Fan chart -----
-            st.markdown("##### View 1 — Volatility fan chart")
-            st.caption("Forecast price (using ARIMAX point forecast as centre) with GARCH-derived uncertainty bands.")
-
-            # Use ARIMAX forecast as centre (already cached)
-            try:
-                arx_for_fan = cached_arimax(region, region_pick, ar_arx, d_arx, ma_arx,
-                                              forecast_horizon, drivers_tuple, file_mtime)
-            except Exception:
-                arx_for_fan = None
-
-            if arx_for_fan and arx_for_fan.success and arx_for_fan.forecast_mean is not None:
-                target = region.y
-                point_fc = arx_for_fan.forecast_mean
-
-                # Build fan: 1, 2, 3 sigma bands using GARCH forecast vol
-                fan_fig = go.Figure()
-                fan_fig.add_trace(go.Scatter(
-                    x=target.index[-36:], y=target.values[-36:],
-                    mode="lines",
-                    line=dict(color=COLORS["ink"], width=1.5),
-                    name="Actual"
-                ))
-                # Compute fan bands
-                for k_sigma, alpha_fill in [(3, 0.10), (2, 0.18), (1, 0.30)]:
-                    # cumulative vol grows with sqrt(h) — multiply by sqrt(h)
-                    horizon_steps = np.arange(1, len(point_fc) + 1)
-                    vol_h = g.forecast_vol.values[: len(point_fc)] / 100.0  # to decimal
-                    # The vol forecast is for log-returns; scale to price space
-                    last_price = float(target.iloc[-1])
-                    band_pct = k_sigma * vol_h * np.sqrt(horizon_steps)
-                    upper = point_fc.values * np.exp(band_pct)
-                    lower = point_fc.values * np.exp(-band_pct)
-                    fan_fig.add_trace(go.Scatter(
-                        x=point_fc.index, y=upper,
-                        mode="lines", line=dict(width=0), showlegend=False,
-                        hoverinfo="skip"
-                    ))
-                    fan_fig.add_trace(go.Scatter(
-                        x=point_fc.index, y=lower,
-                        mode="lines", line=dict(width=0),
-                        fill="tonexty",
-                        fillcolor=f"rgba(31, 78, 121, {alpha_fill})",
-                        name=f"±{k_sigma}σ band",
-                    ))
-                fan_fig.add_trace(go.Scatter(
-                    x=point_fc.index, y=point_fc.values,
-                    mode="lines",
-                    line=dict(color=COLORS["accent"], width=2.5),
-                    name="Point forecast"
-                ))
-                fan_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
-                                        yaxis_title=f"{currency}/t",
-                                        title=dict(text="Forecast with GARCH-derived uncertainty bands",
-                                                     font=dict(size=13)))
-                style_axes(fan_fig)
-                st.plotly_chart(fan_fig, use_container_width=True)
-                st.caption(
-                    "Fan widths: 1σ (~68% probability), 2σ (~95%), 3σ (~99.7%). "
-                    "Bands grow with horizon because cumulative uncertainty compounds with √h."
-                )
-            else:
-                st.warning("ARIMAX forecast required for fan chart but failed — try simpler ARIMAX parameters.")
-
-            # ----- View 2: Risk metrics -----
-            st.markdown("##### View 2 — Risk metrics (1-month forward)")
-            rm1, rm2, rm3, rm4 = st.columns(4)
-            rm1.metric("VaR 95%", f"{currency} {g.var_95:,.0f}/t",
-                         help="5% probability of losing MORE than this in 1 month.")
-            rm2.metric("VaR 99%", f"{currency} {g.var_99:,.0f}/t",
-                         help="1% probability of losing MORE than this in 1 month.")
-            rm3.metric("Expected Shortfall 95%", f"{currency} {g.expected_shortfall_95:,.0f}/t",
-                         help="Average loss IF the 5% tail event occurs.")
-            rm4.metric("Expected Shortfall 99%", f"{currency} {g.expected_shortfall_99:,.0f}/t",
-                         help="Average loss IF the 1% tail event occurs.")
+            # ===== SECTION B: Out-of-Sample Test =====
+            st.markdown("---")
+            st.markdown("#### Section B · Out-of-Sample Test")
             st.caption(
-                "VaR (Value-at-Risk) and ES (Expected Shortfall) are computed from the GARCH-forecast "
-                "volatility under a normal distribution assumption. ES is generally more honest than "
-                "VaR because it captures the magnitude of tail losses, not just their threshold."
+                "Hold out the most recent N months as a test set. Fit the model on data "
+                "BEFORE that window, forecast forward through the test period using the "
+                "actual driver values for those months, and compare predictions to the "
+                "actuals you held out. Same code path the HTML report uses — numbers will "
+                "match exactly when the orders match."
             )
 
-            # ----- View 3: Volatility regime -----
-            st.markdown("##### View 3 — Volatility regime indicator")
+            oos_c1, oos_c2, oos_c3 = st.columns([1, 1, 1])
+            with oos_c1:
+                oos_model = st.selectbox(
+                    "Model", ["ARIMAX", "ARDL"], key="fc_oos_model",
+                    help="Which model to evaluate. AR/d/MA/DL orders are taken from "
+                         "the Section A sliders above so you can iterate quickly."
+                )
+            with oos_c2:
+                # Cap test size sensibly — model classes need at least 12 obs of
+                # training data on top of the test window
+                oos_test_max = max(6, min(24, region.n_obs - 24))
+                oos_test_size = st.slider(
+                    "Test window (months)", 3, oos_test_max,
+                    min(12, oos_test_max), step=3, key="fc_oos_test_size",
+                    help="How many of the most recent months to hold out. "
+                         "12 is the standard choice and matches the report's default."
+                )
+            with oos_c3:
+                st.metric("Training months",
+                           f"{region.n_obs - oos_test_size}",
+                           f"of {region.n_obs} total")
 
-            # Build a visualization showing current vol vs full historical distribution
-            vol_history = g.conditional_vol
-            vol_levels = sorted(vol_history.values)
-            n = len(vol_levels)
+            if st.button("Run out-of-sample test", key="fc_oos_run",
+                           help="Click to fit on training data and evaluate on the "
+                                "held-out window."):
+                oos = cached_oos_test(region, region_pick, oos_model.lower(),
+                                        ar_arx, d_arx, ma_arx, dl_ardl,
+                                        oos_test_size, drivers_tuple, file_mtime)
+                st.session_state["fc_oos_result"] = oos
 
-            # Plot histogram + current marker
-            rg_fig = go.Figure()
-            rg_fig.add_trace(go.Histogram(
-                x=vol_history.values,
-                nbinsx=40,
-                marker_color=COLORS["muted"],
-                opacity=0.7,
-                name="Historical vol"
-            ))
-            rg_fig.add_vline(
-                x=g.current_vol,
-                line=dict(color=COLORS["danger"], width=3, dash="dash"),
-                annotation_text=f"Current: P{g.vol_percentile:.0f}",
-                annotation_position="top",
+            if "fc_oos_result" in st.session_state:
+                oos = st.session_state["fc_oos_result"]
+                if not oos.success:
+                    st.error(f"Out-of-sample test failed: {oos.error_msg}")
+                else:
+                    # Frame the result before showing metrics
+                    if oos.hit_rate >= 60:
+                        skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** indicates "
+                                       "the model has genuine directional skill on this "
+                                       "window.")
+                    elif oos.hit_rate >= 50:
+                        skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is only "
+                                       "modestly above coin-flip — directional skill is weak.")
+                    else:
+                        skill_text = (f"A hit rate of **{oos.hit_rate:.0f}%** is below "
+                                       "coin-flip — direction predictions failed on this window.")
+
+                    st.info(
+                        f"**Honest assessment:** Trained on {oos.n_train} months "
+                        f"({oos.train_start} → {oos.train_end}), tested on {oos.n_test} "
+                        f"months ({oos.test_start} → {oos.test_end}). "
+                        f"Forecasts were on average **±{oos.mape:.1f}%** away from "
+                        f"actual prices. {skill_text}"
+                    )
+
+                    # Metrics row
+                    om1, om2, om3, om4, om5 = st.columns(5)
+                    om1.metric("RMSE", f"{currency} {oos.rmse:,.0f}/t")
+                    om2.metric("MAE", f"{currency} {oos.mae:,.0f}/t")
+                    om3.metric("MAPE", f"{oos.mape:.2f}%")
+                    om4.metric("R² (out-of-sample)", f"{oos.r2:.3f}",
+                                help="Out-of-sample R². Can be negative if the forecast "
+                                     "is worse than predicting the test-set mean — that "
+                                     "indicates the model has no useful signal on this window.")
+                    om5.metric("Hit rate (direction)", f"{oos.hit_rate:.0f}%",
+                                help="% of test months where forecast direction matched "
+                                     "actual direction (vs. previous value).")
+
+                    # Ljung-Box on training residuals
+                    if oos.ljung_box_p is not None:
+                        lb_status = ("✓ no residual autocorrelation" if oos.ljung_box_p > 0.05
+                                      else "⚠ residual autocorrelation present in training")
+                        st.caption(f"Training-residual Ljung-Box (10 lags): "
+                                    f"p = {oos.ljung_box_p:.3f} → {lb_status}")
+
+                    # Chart: actual + in-sample fit + OOS predictions
+                    st.markdown("##### Predicted vs actual on held-out window")
+                    fig = go.Figure()
+                    target = region.y
+
+                    # Full actual series (black)
+                    fig.add_trace(go.Scatter(
+                        x=target.index, y=target.values, mode="lines",
+                        line=dict(color=COLORS["ink"], width=1.5),
+                        name="Actual",
+                    ))
+
+                    # In-sample fit (dotted accent — only training portion)
+                    if oos.fitted_in_sample is not None:
+                        fig.add_trace(go.Scatter(
+                            x=oos.fitted_in_sample.index,
+                            y=oos.fitted_in_sample.values,
+                            mode="lines",
+                            line=dict(color=COLORS["accent"], width=1.3, dash="dot"),
+                            name="In-sample fit",
+                            opacity=0.7,
+                        ))
+
+                    # OOS prediction line+markers (warning = orange, distinct)
+                    fig.add_trace(go.Scatter(
+                        x=oos.oos_predictions.index, y=oos.oos_predictions.values,
+                        mode="lines+markers",
+                        line=dict(color=COLORS["warning"], width=2.5),
+                        marker=dict(size=7, symbol="diamond"),
+                        name="OOS prediction",
+                    ))
+
+                    # Vertical divider at train/test split. Use add_shape +
+                    # add_annotation separately rather than add_vline(annotation_text=...)
+                    # because the latter crashes on a Timestamp x with current plotly
+                    # versions ("Addition/subtraction of integers and Timestamp is no
+                    # longer supported").
+                    if oos.fitted_in_sample is not None and len(oos.fitted_in_sample) > 0:
+                        split_x = oos.fitted_in_sample.index[-1]
+                    else:
+                        split_x = oos.oos_predictions.index[0]
+                    split_x_str = (split_x.strftime("%Y-%m-%d")
+                                    if hasattr(split_x, "strftime") else str(split_x))
+                    fig.add_shape(
+                        type="line", xref="x", yref="paper",
+                        x0=split_x_str, x1=split_x_str, y0=0, y1=1,
+                        line=dict(color=COLORS["muted"], width=1, dash="dash"),
+                    )
+                    fig.add_annotation(
+                        x=split_x_str, y=1.02, xref="x", yref="paper",
+                        text="train | test", showarrow=False,
+                        font=dict(color=COLORS["muted"], size=11),
+                    )
+
+                    fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                                        yaxis_title=f"{currency}/t",
+                                        hovermode="x unified",
+                                        title=dict(
+                                            text=f"{oos.model_type} — {oos.config_summary} · "
+                                                  f"trained on {oos.n_train}m, tested on {oos.n_test}m",
+                                            font=dict(size=13),
+                                        ))
+                    style_axes(fig)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Residuals table + chart
+                    with st.expander("Test-period residuals (actual − predicted)"):
+                        resid = oos.oos_actuals.values - oos.oos_predictions.values
+                        resid_df = pd.DataFrame({
+                            "Date": [d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)
+                                      for d in oos.oos_predictions.index],
+                            f"Actual ({currency}/t)": oos.oos_actuals.values.round(0),
+                            f"Predicted ({currency}/t)": oos.oos_predictions.values.round(0),
+                            "Residual": resid.round(0),
+                            "% error": (resid / oos.oos_actuals.values * 100).round(2),
+                        })
+                        st.dataframe(resid_df, use_container_width=True, hide_index=True)
+
+                        rfig = go.Figure()
+                        rfig.add_trace(go.Bar(
+                            x=oos.oos_predictions.index, y=resid,
+                            marker_color=[COLORS["accent2"] if r >= 0 else COLORS["danger"]
+                                           for r in resid],
+                            name="Residual",
+                        ))
+                        rfig.add_hline(y=0, line_color=COLORS["muted"], line_width=1)
+                        rfig.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN, height=260,
+                                            yaxis_title=f"Residual ({currency}/t)",
+                                            title=dict(text="Residuals over test window",
+                                                        font=dict(size=12)))
+                        style_axes(rfig)
+                        st.plotly_chart(rfig, use_container_width=True)
+
+                    # Coefficient table from the training-period fit
+                    if oos.coefficients is not None:
+                        with st.expander("Training-period model coefficients"):
+                            cdf = oos.coefficients.copy().reset_index()
+                            # Round numeric columns
+                            for col in cdf.columns:
+                                if pd.api.types.is_numeric_dtype(cdf[col]):
+                                    cdf[col] = cdf[col].round(4)
+                            # Add significance stars if p_value column exists
+                            if "p_value" in cdf.columns:
+                                cdf["sig"] = cdf["p_value"].apply(
+                                    lambda p: "***" if pd.notna(p) and p < 0.001 else
+                                              "**" if pd.notna(p) and p < 0.01 else
+                                              "*" if pd.notna(p) and p < 0.05 else ""
+                                )
+                            st.dataframe(cdf, use_container_width=True, hide_index=True)
+                            st.caption("Significance: * p<0.05, ** p<0.01, *** p<0.001. "
+                                        "These coefficients are estimated on training data only.")
+
+                    # Plain-English interpretation expander
+                    interp_blocks = []
+                    interp_blocks.append(
+                        f"**What this test shows.** The model was fit on the first "
+                        f"{oos.n_train} months of data ({oos.train_start} through "
+                        f"{oos.train_end}) and asked to forecast {oos.n_test} months "
+                        f"forward. Those forecasts were then compared to the actual "
+                        f"prices observed in {oos.test_start} – {oos.test_end}, which "
+                        f"the model never saw during fitting."
+                    )
+                    interp_blocks.append(
+                        f"**Magnitude error.** Average absolute miss was "
+                        f"{currency} {oos.mae:,.0f}/t (MAE), or {oos.mape:.1f}% "
+                        f"(MAPE). RMSE of {currency} {oos.rmse:,.0f}/t puts more weight "
+                        f"on the worst months — when RMSE is meaningfully larger than MAE, "
+                        f"a few forecasts missed badly while most were close."
+                    )
+                    if oos.r2 < 0:
+                        r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is negative — "
+                                    "the model performed worse than simply predicting the "
+                                    "test-set mean. This means the model's structure has "
+                                    "no useful signal on this window; it's adding noise. "
+                                    "Common causes: training period dynamics differ from "
+                                    "the test period, or the test window is unusually flat.")
+                    elif oos.r2 < 0.3:
+                        r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is low — "
+                                    "the model captures only a small share of test-period "
+                                    "variation. Treat point forecasts cautiously.")
+                    elif oos.r2 < 0.7:
+                        r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is moderate — "
+                                    "the model captures the broad shape of the test period "
+                                    "but misses meaningful detail.")
+                    else:
+                        r2_text = (f"Out-of-sample R² of **{oos.r2:.3f}** is strong — "
+                                    "the model tracks the test period well. Validate on "
+                                    "additional windows before trusting it for live "
+                                    "forecasting.")
+                    interp_blocks.append(f"**Goodness of fit.** {r2_text}")
+                    interp_blocks.append(
+                        f"**Direction.** {skill_text} Note that with only {oos.n_test} "
+                        f"comparisons, hit rate has wide confidence bands — repeat with "
+                        f"different test windows or models before generalising."
+                    )
+                    interp_blocks.append(
+                        "**Caveat.** This is a single train/test split. Performance on "
+                        "this specific window may not reflect average performance — try a "
+                        "different test size, swap models (ARIMAX vs ARDL), or remove "
+                        "drivers in Section A and re-run to compare."
+                    )
+                    try:
+                        render_interpretation(
+                            interp_blocks,
+                            label="📝 Out-of-sample test interpretation",
+                            settings_summary=f"{oos.model_type} {oos.config_summary}, "
+                                              f"test window={oos.n_test}m, "
+                                              f"{len(selected_drivers)} drivers",
+                        )
+                    except Exception:
+                        pass
+
+
+            # ===== SECTION C: GARCH Volatility + Risk =====
+            st.markdown("---")
+            st.markdown("#### Section C · GARCH Volatility & Risk Metrics")
+            st.caption(
+                "GARCH(1,1) model fitted on log-returns. Provides conditional volatility forecast, "
+                "fan chart on point forecast, VaR/Expected Shortfall, and current volatility regime classification."
             )
-            # Regime band shading
-            p25 = float(np.percentile(vol_history.values, 25))
-            p65 = float(np.percentile(vol_history.values, 65))
-            p90 = float(np.percentile(vol_history.values, 90))
-            rg_fig.add_vrect(x0=0, x1=p25, fillcolor="green", opacity=0.05, line_width=0,
-                                annotation_text="LOW", annotation_position="top left")
-            rg_fig.add_vrect(x0=p25, x1=p65, fillcolor="grey", opacity=0.05, line_width=0,
-                                annotation_text="NORMAL", annotation_position="top left")
-            rg_fig.add_vrect(x0=p65, x1=p90, fillcolor="orange", opacity=0.10, line_width=0,
-                                annotation_text="ELEVATED", annotation_position="top left")
-            rg_fig.add_vrect(x0=p90, x1=max(vol_history.values) * 1.05,
-                                fillcolor="red", opacity=0.15, line_width=0,
-                                annotation_text="EXTREME", annotation_position="top left")
-            rg_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=350,
-                                    xaxis_title="Conditional volatility (% / period)",
-                                    yaxis_title="Frequency",
-                                    showlegend=False,
-                                    title=dict(text="Current volatility regime in historical context",
-                                                 font=dict(size=13)))
-            style_axes(rg_fig)
-            st.plotly_chart(rg_fig, use_container_width=True)
 
-            regime_msg = {
-                "low": "Volatility is unusually subdued. Risk models calibrated here will materially under-estimate stress-period tail risk.",
-                "normal": "Volatility is in its typical operating range. Standard risk parameters apply.",
-                "elevated": "Volatility is elevated above norms. Position-sizing should be reduced; expect larger price swings.",
-                "extreme": "Volatility is in the top decile of historical experience. This is a stress regime — exercise maximum caution on directional positions."
-            }.get(g.regime_label, "")
-            if regime_msg:
-                st.info(f"**Regime interpretation:** {regime_msg}")
+            g = cached_garch(region, region_pick, forecast_horizon, file_mtime)
+
+            if not g.success:
+                st.error(f"GARCH fit failed: {g.error_msg}")
+            else:
+                # Live interpretation
+                try:
+                    render_interpretation(
+                        narrator.narrate_garch_dashboard(g, currency,
+                                                            latest_price=float(region.y.iloc[-1])),
+                        label="📝 GARCH / risk interpretation",
+                        settings_summary=f"Region: {region_pick.title()}, "
+                                          f"Forecast horizon: {forecast_horizon}m",
+                    )
+                except Exception:
+                    pass
+
+                # Top-line GARCH metrics
+                gm1, gm2, gm3, gm4 = st.columns(4)
+                gm1.metric("Persistence (α+β)", f"{g.persistence:.3f}",
+                             help="Higher = volatility shocks decay slowly. Values near 1 indicate near-permanent shocks.")
+                gm2.metric("Half-life", f"{g.half_life_months:.1f}m" if g.half_life_months and not np.isinf(g.half_life_months) else "∞",
+                             help="Months until a vol shock decays to half its initial size.")
+                gm3.metric("Current vol percentile", f"P{g.vol_percentile:.0f}")
+                regime_emoji = {"low": "🟢", "normal": "⚪", "elevated": "🟠", "extreme": "🔴"}.get(g.regime_label, "⚪")
+                gm4.metric("Volatility regime", f"{regime_emoji} {g.regime_label.upper()}")
+
+                # ----- View 1: Fan chart -----
+                st.markdown("##### View 1 — Volatility fan chart")
+                st.caption("Forecast price (using ARIMAX point forecast as centre) with GARCH-derived uncertainty bands.")
+
+                # Use ARIMAX forecast as centre (already cached)
+                try:
+                    arx_for_fan = cached_arimax(region, region_pick, ar_arx, d_arx, ma_arx,
+                                                  forecast_horizon, drivers_tuple, file_mtime)
+                except Exception:
+                    arx_for_fan = None
+
+                if arx_for_fan and arx_for_fan.success and arx_for_fan.forecast_mean is not None:
+                    target = region.y
+                    point_fc = arx_for_fan.forecast_mean
+
+                    # Build fan: 1, 2, 3 sigma bands using GARCH forecast vol
+                    fan_fig = go.Figure()
+                    fan_fig.add_trace(go.Scatter(
+                        x=target.index[-36:], y=target.values[-36:],
+                        mode="lines",
+                        line=dict(color=COLORS["ink"], width=1.5),
+                        name="Actual"
+                    ))
+                    # Compute fan bands
+                    for k_sigma, alpha_fill in [(3, 0.10), (2, 0.18), (1, 0.30)]:
+                        # cumulative vol grows with sqrt(h) — multiply by sqrt(h)
+                        horizon_steps = np.arange(1, len(point_fc) + 1)
+                        vol_h = g.forecast_vol.values[: len(point_fc)] / 100.0  # to decimal
+                        # The vol forecast is for log-returns; scale to price space
+                        last_price = float(target.iloc[-1])
+                        band_pct = k_sigma * vol_h * np.sqrt(horizon_steps)
+                        upper = point_fc.values * np.exp(band_pct)
+                        lower = point_fc.values * np.exp(-band_pct)
+                        fan_fig.add_trace(go.Scatter(
+                            x=point_fc.index, y=upper,
+                            mode="lines", line=dict(width=0), showlegend=False,
+                            hoverinfo="skip"
+                        ))
+                        fan_fig.add_trace(go.Scatter(
+                            x=point_fc.index, y=lower,
+                            mode="lines", line=dict(width=0),
+                            fill="tonexty",
+                            fillcolor=f"rgba(31, 78, 121, {alpha_fill})",
+                            name=f"±{k_sigma}σ band",
+                        ))
+                    fan_fig.add_trace(go.Scatter(
+                        x=point_fc.index, y=point_fc.values,
+                        mode="lines",
+                        line=dict(color=COLORS["accent"], width=2.5),
+                        name="Point forecast"
+                    ))
+                    fan_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                                            yaxis_title=f"{currency}/t",
+                                            title=dict(text="Forecast with GARCH-derived uncertainty bands",
+                                                         font=dict(size=13)))
+                    style_axes(fan_fig)
+                    st.plotly_chart(fan_fig, use_container_width=True)
+                    st.caption(
+                        "Fan widths: 1σ (~68% probability), 2σ (~95%), 3σ (~99.7%). "
+                        "Bands grow with horizon because cumulative uncertainty compounds with √h."
+                    )
+                else:
+                    st.warning("ARIMAX forecast required for fan chart but failed — try simpler ARIMAX parameters.")
+
+                # ----- View 2: Risk metrics -----
+                st.markdown("##### View 2 — Risk metrics (1-month forward)")
+                rm1, rm2, rm3, rm4 = st.columns(4)
+                rm1.metric("VaR 95%", f"{currency} {g.var_95:,.0f}/t",
+                             help="5% probability of losing MORE than this in 1 month.")
+                rm2.metric("VaR 99%", f"{currency} {g.var_99:,.0f}/t",
+                             help="1% probability of losing MORE than this in 1 month.")
+                rm3.metric("Expected Shortfall 95%", f"{currency} {g.expected_shortfall_95:,.0f}/t",
+                             help="Average loss IF the 5% tail event occurs.")
+                rm4.metric("Expected Shortfall 99%", f"{currency} {g.expected_shortfall_99:,.0f}/t",
+                             help="Average loss IF the 1% tail event occurs.")
+                st.caption(
+                    "VaR (Value-at-Risk) and ES (Expected Shortfall) are computed from the GARCH-forecast "
+                    "volatility under a normal distribution assumption. ES is generally more honest than "
+                    "VaR because it captures the magnitude of tail losses, not just their threshold."
+                )
+
+                # ----- View 3: Volatility regime -----
+                st.markdown("##### View 3 — Volatility regime indicator")
+
+                # Build a visualization showing current vol vs full historical distribution
+                vol_history = g.conditional_vol
+                vol_levels = sorted(vol_history.values)
+                n = len(vol_levels)
+
+                # Plot histogram + current marker
+                rg_fig = go.Figure()
+                rg_fig.add_trace(go.Histogram(
+                    x=vol_history.values,
+                    nbinsx=40,
+                    marker_color=COLORS["muted"],
+                    opacity=0.7,
+                    name="Historical vol"
+                ))
+                rg_fig.add_vline(
+                    x=g.current_vol,
+                    line=dict(color=COLORS["danger"], width=3, dash="dash"),
+                    annotation_text=f"Current: P{g.vol_percentile:.0f}",
+                    annotation_position="top",
+                )
+                # Regime band shading
+                p25 = float(np.percentile(vol_history.values, 25))
+                p65 = float(np.percentile(vol_history.values, 65))
+                p90 = float(np.percentile(vol_history.values, 90))
+                rg_fig.add_vrect(x0=0, x1=p25, fillcolor="green", opacity=0.05, line_width=0,
+                                    annotation_text="LOW", annotation_position="top left")
+                rg_fig.add_vrect(x0=p25, x1=p65, fillcolor="grey", opacity=0.05, line_width=0,
+                                    annotation_text="NORMAL", annotation_position="top left")
+                rg_fig.add_vrect(x0=p65, x1=p90, fillcolor="orange", opacity=0.10, line_width=0,
+                                    annotation_text="ELEVATED", annotation_position="top left")
+                rg_fig.add_vrect(x0=p90, x1=max(vol_history.values) * 1.05,
+                                    fillcolor="red", opacity=0.15, line_width=0,
+                                    annotation_text="EXTREME", annotation_position="top left")
+                rg_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=350,
+                                        xaxis_title="Conditional volatility (% / period)",
+                                        yaxis_title="Frequency",
+                                        showlegend=False,
+                                        title=dict(text="Current volatility regime in historical context",
+                                                     font=dict(size=13)))
+                style_axes(rg_fig)
+                st.plotly_chart(rg_fig, use_container_width=True)
+
+                regime_msg = {
+                    "low": "Volatility is unusually subdued. Risk models calibrated here will materially under-estimate stress-period tail risk.",
+                    "normal": "Volatility is in its typical operating range. Standard risk parameters apply.",
+                    "elevated": "Volatility is elevated above norms. Position-sizing should be reduced; expect larger price swings.",
+                    "extreme": "Volatility is in the top decile of historical experience. This is a stress regime — exercise maximum caution on directional positions."
+                }.get(g.regime_label, "")
+                if regime_msg:
+                    st.info(f"**Regime interpretation:** {regime_msg}")
 
 
 # ===== MACRO CALENDAR =====
@@ -2127,6 +2138,340 @@ with tab_macro:
                                 f"sample of {ev.simple_n} recent months.")
                 else:
                     st.info("Insufficient analogues — rely on mechanism above for guidance.")
+
+
+# ===== LIQUIDITY TAB (India only) =====
+if tab_liquidity is not None:
+    with tab_liquidity:
+        try:
+            from pipeline.liquidity import (
+                regime_performance, liquidity_lead_lag,
+                summarize_current_state, interpret_current_state, regime_periods,
+            )
+
+            rdf = region.df  # convenience alias
+
+            st.subheader("India Liquidity Monitor")
+            st.markdown(
+                "Banking-system liquidity conditions, RBI monetary policy stance, and how they "
+                "transmit into Indian HRC prices. Liquidity tightness affects steel demand with "
+                "a typical lag of **2–5 months** via working-capital financing for distributors "
+                "and downstream consumers."
+            )
+
+            # ---- Defensive helpers ----
+            def _safe_num(v, default=np.nan):
+                try:
+                    f = float(v)
+                    return f if not np.isnan(f) else default
+                except (TypeError, ValueError):
+                    return default
+
+            def _fmt_bps(spread_pct):
+                """Convert a spread expressed in % to a +/- bps string. NaN-safe."""
+                v = _safe_num(spread_pct)
+                if np.isnan(v):
+                    return "—"
+                return f"{v*100:+.0f} bps"
+
+            # ---- Current-state header (each metric guarded individually) ----
+            state = summarize_current_state(rdf) or {}
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+                regime = state.get('Liquidity_Regime', '—')
+                if regime is None or (isinstance(regime, float) and np.isnan(regime)):
+                    regime = '—'
+                st.metric("Liquidity Regime", str(regime))
+
+            with c2:
+                spread = _safe_num(state.get('WACR_Spread'))
+                spread_chg = _safe_num(state.get('WACR_Spread_3m_change'), default=0.0)
+                if not np.isnan(spread):
+                    st.metric(
+                        "WACR Spread",
+                        f"{spread*100:+.0f} bps",
+                        delta=f"{spread_chg*100:+.0f} bps (3m)" if not np.isnan(spread_chg) else None,
+                    )
+                else:
+                    st.metric("WACR Spread", "—")
+
+            with c3:
+                stress = _safe_num(state.get('Stress_Index'))
+                stress_chg = _safe_num(state.get('Stress_Index_3m_change'), default=0.0)
+                if not np.isnan(stress):
+                    st.metric(
+                        "Stress Index",
+                        f"{stress:.0f} / 100",
+                        delta=f"{stress_chg:+.1f} (3m)" if not np.isnan(stress_chg) else None,
+                        delta_color="inverse",
+                    )
+                else:
+                    st.metric("Stress Index", "—")
+
+            with c4:
+                policy = state.get('Policy_Regime', '—')
+                if policy is None or (isinstance(policy, float) and np.isnan(policy)):
+                    policy = '—'
+                st.metric("RBI Policy", str(policy))
+
+            # Interpretation paragraph
+            try:
+                interp_text = interpret_current_state(state)
+                if interp_text:
+                    st.info(interp_text)
+            except Exception as e:
+                st.caption(f"(interpretation unavailable: {type(e).__name__})")
+
+            # Quick-read details card
+            try:
+                bc_yoy = _safe_num(state.get('Bank_Credit_YoY'))
+                gs10 = _safe_num(state.get('GSec_10Y'))
+                repo = _safe_num(state.get('Repo_Rate'))
+                term_premium_bps = (gs10 - repo) * 100 if not (np.isnan(gs10) or np.isnan(repo)) else np.nan
+                quick_parts = []
+                if not np.isnan(bc_yoy):
+                    quick_parts.append(f"Bank credit is growing at **{bc_yoy:.1f}% YoY**")
+                if not np.isnan(gs10) and not np.isnan(repo):
+                    quick_parts.append(
+                        f"the 10Y G-Sec yield sits at **{gs10:.2f}%** versus a policy repo of "
+                        f"**{repo:.2f}%**, giving a term premium of **{term_premium_bps:.0f} bps**"
+                    )
+                if quick_parts:
+                    with st.expander("Quick read on India liquidity", expanded=False):
+                        st.markdown("; ".join(quick_parts) + ".")
+            except Exception as e:
+                st.caption(f"(quick read unavailable: {type(e).__name__})")
+
+            st.markdown("---")
+
+            # ---- 1. STRESS GAUGE ----
+            st.markdown("### Liquidity Stress Gauge")
+            try:
+                stress_val = float(state.get('Stress_Index', 50.0))
+                if np.isnan(stress_val):
+                    stress_val = 50.0
+                gauge = go.Figure(go.Indicator(
+                    mode="gauge+number+delta",
+                    value=stress_val,
+                    number={'suffix': " / 100", 'font': {'size': 28}},
+                    delta={'reference': 50,
+                           'increasing': {'color': COLORS["danger"]},
+                           'decreasing': {'color': COLORS["accent2"]}},
+                    gauge={
+                        'axis': {'range': [0, 100], 'tickwidth': 1,
+                                 'tickcolor': COLORS["rule"]},
+                        'bar': {'color': COLORS["ink"], 'thickness': 0.18},
+                        'bgcolor': "white",
+                        'borderwidth': 1, 'bordercolor': COLORS["rule"],
+                        'steps': [
+                            {'range': [0, 30],   'color': '#C7E8D2'},
+                            {'range': [30, 50],  'color': '#E6F1E8'},
+                            {'range': [50, 65],  'color': '#F5F1E5'},
+                            {'range': [65, 80],  'color': '#F7DCC2'},
+                            {'range': [80, 100], 'color': '#F2BFC0'},
+                        ],
+                        'threshold': {
+                            'line': {'color': COLORS["danger"], 'width': 3},
+                            'thickness': 0.85, 'value': stress_val,
+                        },
+                    },
+                ))
+                gauge.update_layout(**PLOT_BASE, height=280,
+                                    margin=dict(l=20, r=20, t=20, b=10))
+                st.plotly_chart(gauge, use_container_width=True)
+                st.caption(
+                    "**0–30** Abundant liquidity · **30–50** Accommodative · "
+                    "**50–65** Mildly elevated · **65–80** Elevated stress · "
+                    "**80–100** Severe stress. Composite of WACR spread, term premium, "
+                    "credit-growth slowdown, and 6m repo change."
+                )
+            except Exception as e:
+                st.warning(f"Stress gauge could not render: {type(e).__name__}: {e}")
+
+            st.markdown("---")
+
+            # ---- 2. HRC vs LIQUIDITY REGIME CHART ----
+            st.markdown(f"### {region.target} vs Liquidity Regime")
+            try:
+                hrc = rdf[region.target].dropna()
+                spread_series = rdf['WACR_Spread'].dropna() if 'WACR_Spread' in rdf.columns else pd.Series(dtype=float)
+                repo_series = rdf['Repo_Rate'].dropna() if 'Repo_Rate' in rdf.columns else pd.Series(dtype=float)
+                regime_series = rdf['Liquidity_Regime'].dropna() if 'Liquidity_Regime' in rdf.columns else pd.Series(dtype=object)
+
+                REGIME_COLOURS = {
+                    'Surplus': 'rgba(45, 106, 79, 0.12)',
+                    'Neutral': 'rgba(92, 107, 127, 0.08)',
+                    'Tight':   'rgba(164, 22, 26, 0.12)',
+                }
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                # Shaded regime backgrounds
+                if not regime_series.empty:
+                    blocks = regime_periods(regime_series)
+                    for b in blocks:
+                        fig.add_vrect(
+                            x0=b['start'], x1=b['end'],
+                            fillcolor=REGIME_COLOURS.get(b['regime'], 'rgba(0,0,0,0.05)'),
+                            line_width=0, layer="below",
+                        )
+
+                # HRC line
+                fig.add_trace(
+                    go.Scatter(x=hrc.index, y=hrc.values, name=f"HRC ({currency}/t)",
+                               mode="lines", line=dict(color=COLORS["accent"], width=2.2),
+                               hovertemplate="%{x|%b %Y}: %{y:,.0f}<extra></extra>"),
+                    secondary_y=False,
+                )
+                # WACR Spread in bps
+                if not spread_series.empty:
+                    fig.add_trace(
+                        go.Scatter(x=spread_series.index, y=spread_series.values * 100,
+                                   name="WACR − Repo (bps)",
+                                   mode="lines",
+                                   line=dict(color=COLORS["danger"], width=1.6, dash="dot"),
+                                   hovertemplate="%{x|%b %Y}: %{y:+.0f} bps<extra></extra>"),
+                        secondary_y=True,
+                    )
+                # Repo line (hidden by default)
+                if not repo_series.empty:
+                    fig.add_trace(
+                        go.Scatter(x=repo_series.index, y=repo_series.values * 100,
+                                   name="Repo Rate (bps)",
+                                   mode="lines",
+                                   line=dict(color=COLORS["muted"], width=1.2, dash="dash"),
+                                   hovertemplate="%{x|%b %Y}: %{y:.0f} bps<extra></extra>",
+                                   visible="legendonly"),
+                        secondary_y=True,
+                    )
+                fig.update_yaxes(title_text=f"HRC ({currency}/t)", secondary_y=False)
+                fig.update_yaxes(title_text="bps (spread / rate)", secondary_y=True,
+                                 showgrid=False)
+                fig.update_layout(**PLOT_BASE, height=480, margin=DEFAULT_MARGIN,
+                                  legend=dict(orientation="h", yanchor="bottom",
+                                              y=1.02, xanchor="left", x=0))
+                style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+                leg1, leg2, leg3 = st.columns(3)
+                leg1.markdown("**Green** = Surplus liquidity (WACR below Repo)")
+                leg2.markdown("**Grey** = Neutral")
+                leg3.markdown("**Red** = Tight liquidity (WACR above Repo)")
+            except Exception as e:
+                st.warning(f"Regime chart could not render: {type(e).__name__}: {e}")
+
+            st.markdown("---")
+
+            # ---- 3. REGIME PERFORMANCE TABLE ----
+            st.markdown("### HRC Performance by Liquidity Regime")
+            try:
+                hrc = rdf[region.target].dropna()
+                perf = regime_performance(hrc, rdf['Liquidity_Regime'])
+                if perf is not None and not perf.empty:
+                    st.dataframe(
+                        perf.style.format({
+                            'Avg_Return_MoM_%': '{:+.2f}',
+                            'Annualized_Return_%': '{:+.1f}',
+                            'Volatility_Ann_%': '{:.1f}',
+                            'Max_Drawdown_%': '{:.1f}',
+                            'Hit_Rate_%': '{:.0f}',
+                        }).background_gradient(
+                            cmap='RdYlGn',
+                            subset=['Annualized_Return_%'],
+                        ),
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "Returns are month-over-month on the HRC price level, annualised by "
+                        "compounding. Max drawdown shows the deepest peak-to-trough decline of the "
+                        "cumulative return within each regime."
+                    )
+                else:
+                    st.info("Not enough data to compute regime performance.")
+            except Exception as e:
+                st.warning(f"Regime performance table could not render: {type(e).__name__}: {e}")
+
+            st.markdown("---")
+
+            # ---- 4. LEAD-LAG TABLE ----
+            st.markdown("### Lead-Lag: Does Liquidity Lead HRC?")
+            try:
+                lag_var_candidates = ['WACR_Spread', 'GSec_Repo_Spread', 'Stress_Index',
+                                      'Bank_Credit_YoY', 'Repo_6M_Change']
+                lag_vars = [c for c in lag_var_candidates if c in rdf.columns]
+                if lag_vars:
+                    hrc = rdf[region.target].dropna()
+                    ll = liquidity_lead_lag(hrc, rdf[lag_vars], lags=[0, 1, 3, 6, 12])
+                    st.dataframe(
+                        ll.style.background_gradient(cmap='RdBu_r', vmin=-0.5, vmax=0.5,
+                                                     axis=None).format('{:+.2f}'),
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "Each cell is the Pearson correlation between HRC month-over-month log "
+                        "returns and a liquidity variable lagged by k months. A positive lag means "
+                        "liquidity from k months ago is being matched against HRC return today. "
+                        "Negative values for WACR_Spread or Stress_Index mean tight liquidity "
+                        "precedes weaker HRC."
+                    )
+                else:
+                    st.info("No liquidity variables available for lead-lag analysis.")
+            except Exception as e:
+                st.warning(f"Lead-lag table could not render: {type(e).__name__}: {e}")
+
+            st.markdown("---")
+
+            # ---- 5. LIQUIDITY VARIABLE PANEL ----
+            st.markdown("### Liquidity Variable Panel")
+            st.caption("All base and derived liquidity series at a glance.")
+            try:
+                panel_cfg = [
+                    ('WACR', 'WACR (%)', COLORS["accent"]),
+                    ('Repo_Rate', 'Policy Repo Rate (%)', COLORS["danger"]),
+                    ('GSec_10Y', '10Y G-Sec Yield (%)', COLORS["accent2"]),
+                    ('CRR', 'CRR (%)', COLORS["muted"]),
+                    ('WACR_Spread', 'WACR minus Repo Spread (%)', COLORS["warning"]),
+                    ('Bank_Credit_YoY', 'Bank Credit YoY %', CHART_PALETTE[3]),
+                ]
+                panel_cfg = [(c, lbl, clr) for (c, lbl, clr) in panel_cfg if c in rdf.columns]
+
+                n_cols = 2
+                for i in range(0, len(panel_cfg), n_cols):
+                    cols = st.columns(n_cols)
+                    for j, col in enumerate(cols):
+                        if i + j >= len(panel_cfg):
+                            continue
+                        cname, label, clr = panel_cfg[i + j]
+                        s = rdf[cname].dropna()
+                        if s.empty:
+                            continue
+                        with col:
+                            sub = go.Figure()
+                            sub.add_trace(go.Scatter(
+                                x=s.index, y=s.values, mode="lines",
+                                line=dict(color=clr, width=1.7),
+                                hovertemplate="%{x|%b %Y}: %{y:.2f}<extra></extra>"))
+                            if cname == 'WACR_Spread':
+                                sub.add_hline(y=0, line_dash="dot",
+                                              line_color=COLORS["muted"])
+                            sub.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN,
+                                              height=230, title=label)
+                            style_axes(sub)
+                            st.plotly_chart(sub, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Variable panel could not render: {type(e).__name__}: {e}")
+
+        except Exception as e:
+            import traceback
+            st.error(
+                f"The Liquidity tab encountered a fatal error and could not render.\n\n"
+                f"**{type(e).__name__}**: {e}\n\n"
+                f"```\n{traceback.format_exc()}\n```\n\n"
+                f"This usually means the India sheet is missing required liquidity columns. "
+                f"Check the India sheet in `Raw_data.xlsx` has these columns: "
+                f"WACR, Repo_Rate, GSec_10Y, CRR, Bank_Credit."
+            )
 
 
 # ===== GLOSSARY TAB =====

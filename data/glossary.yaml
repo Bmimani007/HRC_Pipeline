@@ -815,3 +815,191 @@ entries:
       levels. Identifies which markets lead which, whether long-run equilibrium
       exists, and how strong cross-market correlation is.
     see_also: [returns, Granger causality, cointegration]
+
+  # ==========================================================================
+  # LIQUIDITY & MONETARY POLICY (India)
+  # ==========================================================================
+
+  - term: WACR
+    full_name: Weighted Average Call Money Rate
+    category: macro
+    short: The volume-weighted overnight rate at which banks borrow and lend reserves in India's call money market.
+    detail: |
+      WACR is the operational target of the RBI's monetary policy framework.
+      The RBI aims to keep WACR aligned with the policy repo rate via liquidity
+      operations (VRR injections when WACR rises above repo, VRRR absorptions
+      when it falls below). Published daily by RBI; monthly averages are used
+      in this dashboard. WACR is the cleanest single measure of banking-system
+      liquidity stress: persistent positive WACR-Repo spread means banks are
+      borrowing at a premium (tight liquidity); persistent negative spread
+      means surplus reserves sloshing around.
+    see_also: [WACR Spread, Repo Rate, Liquidity Regime]
+
+  - term: WACR Spread
+    full_name: WACR minus Repo Rate
+    category: macro
+    short: The gap between the call money rate and the policy repo rate, in basis points. The headline liquidity-stress signal.
+    detail: |
+      WACR Spread = WACR − Policy Repo Rate. Positive spread means banks are
+      borrowing at rates above the RBI's policy intent — liquidity is tight.
+      Negative spread means surplus liquidity; banks have excess reserves and
+      lend at rates below the repo. The RBI typically tolerates a ±10 bps
+      band around zero; sustained deviations beyond ±25 bps suggest a regime
+      shift in liquidity conditions. Empirically, Indian HRC prices correlate
+      negatively with WACR Spread at a 2-5 month lag: tight liquidity precedes
+      weaker steel demand and prices.
+    see_also: [WACR, Repo Rate, Liquidity Regime, Stress Index]
+
+  - term: Repo Rate
+    full_name: Policy Repo Rate (RBI)
+    category: macro
+    short: The rate at which RBI lends short-term funds to commercial banks against government securities — India's main policy lever.
+    detail: |
+      The repo rate is the RBI's primary monetary policy instrument. Set by
+      the Monetary Policy Committee (MPC) every two months. Changes flow
+      through to bank lending rates, bond yields, and ultimately to industrial
+      financing costs. A hiking cycle raises the cost of working capital for
+      steel distributors and downstream consumers; an easing cycle does the
+      opposite, typically supporting HRC demand with a 2-5 month lag. The
+      repo corridor: MSF rate sits 25 bps above repo (upper bound), SDF rate
+      sits 25 bps below (lower bound).
+    see_also: [WACR, MSF Rate, SDF Rate, Policy Regime]
+
+  - term: MSF Rate
+    full_name: Marginal Standing Facility Rate
+    category: macro
+    short: Upper bound of the RBI's policy corridor — emergency overnight lending rate, typically repo + 25 bps.
+    detail: |
+      MSF is the rate at which banks can borrow overnight from the RBI against
+      excess SLR (statutory liquidity ratio) securities, beyond their LAF
+      allocation. Set 25 bps above the repo rate. WACR rising near or above
+      MSF signals severe liquidity stress — banks turning to the emergency
+      window. Historically rare but informative when it happens.
+
+  - term: SDF Rate
+    full_name: Standing Deposit Facility Rate
+    category: macro
+    short: Lower bound of the RBI's policy corridor — overnight rate at which banks park excess reserves with the RBI, typically repo − 25 bps.
+    detail: |
+      Introduced in April 2022, SDF replaced the fixed reverse repo as the
+      effective floor of the policy corridor. Banks deposit excess overnight
+      liquidity at the SDF rate without needing to post collateral, making it
+      operationally cleaner than the legacy reverse repo. WACR trading at SDF
+      means abundant surplus liquidity.
+
+  - term: G-Sec 10Y
+    full_name: 10-Year Government Security Yield (FBIL)
+    category: macro
+    short: India's benchmark long-term sovereign yield. Reflects long-run inflation expectations and term premium.
+    detail: |
+      The 10-year G-Sec yield is the most-watched long-term rate in India.
+      Driven by inflation expectations, fiscal supply, RBI OMO operations,
+      and global yields. The G-Sec / Repo spread (yield − policy rate) is a
+      classic term premium indicator: widening spreads typically signal
+      rising inflation expectations or fiscal stress, while compressing
+      spreads signal disinflation or flight to quality. Higher long yields
+      lift bond costs for corporate borrowers including steel producers.
+    see_also: [Term Premium, Stress Index]
+
+  - term: CRR
+    full_name: Cash Reserve Ratio
+    category: macro
+    short: The percentage of bank deposits banks must hold as reserves with the RBI in cash, earning no interest.
+    detail: |
+      CRR is a quantitative liquidity tool. Raising CRR by 25 bps removes
+      roughly ₹65,000 crore from the system; cutting CRR injects equivalent
+      liquidity. Historically held at 4.0% but the RBI cut it to 3.0% across
+      Dec 2024 – Mar 2025 in a phased easing of liquidity conditions ahead of
+      repo cuts. A CRR cut is unambiguously expansionary even if the repo
+      stays unchanged.
+
+  - term: Bank Credit YoY
+    full_name: Year-on-year growth in bank credit outstanding
+    category: macro
+    short: Percentage change in total bank loans outstanding versus 12 months ago. Tracks the credit cycle directly.
+    detail: |
+      The most direct measure of credit-cycle momentum in India. Typically
+      runs at 8-15% in normal times; spikes above 15% indicate aggressive
+      credit expansion; drops below 6% indicate credit stress. Steel demand
+      is highly sensitive to credit growth because the construction and auto
+      sectors — the two largest HRC end-use markets — both depend on bank
+      financing. A strong credit-growth pulse typically precedes higher HRC
+      prices with a 3-6 month lag.
+    see_also: [Liquidity Regime, Stress Index]
+
+  - term: Liquidity Regime
+    category: macro
+    short: Classification of each month into Tight, Neutral, or Surplus based on the WACR-Repo spread.
+    detail: |
+      Three states determined dynamically using standard-deviation bands
+      around the historical mean of the WACR spread (default: mean ± 0.5 × std).
+      Tight = spread well above mean (positive); Neutral = within the band;
+      Surplus = well below mean (negative). The 2020-2022 COVID era was a
+      sustained Surplus regime; Oct 2022 – Mar 2025 was a sustained Tight
+      regime. The Regime Performance Table on the Liquidity tab shows how
+      HRC has behaved historically in each regime.
+    see_also: [WACR Spread, Stress Index, Policy Regime]
+
+  - term: Policy Regime
+    category: macro
+    short: Classification of RBI's monetary stance into Hiking, Pause, Easing, or Aggressive Easing — derived from rolling repo changes.
+    detail: |
+      Detected from the 6-month change in the repo rate: ≥125 bps hike =
+      Aggressive Hiking; 25-124 bps = Hiking; -24 to +24 = Pause; -25 to -124
+      = Easing; ≤-125 bps = Aggressive Easing. India was in Aggressive
+      Hiking through 2022 (Repo from 4.00% → 6.50% in 11 months), Pause
+      through most of 2023-24, and Easing from Feb 2025 onward (Repo from
+      6.50% → 5.25% by mid-2026).
+    see_also: [Repo Rate, Liquidity Regime]
+
+  - term: Stress Index
+    full_name: Liquidity Stress Index
+    category: macro
+    short: A 0-100 composite scaling the joint stress signal from WACR spread, term premium, credit slowdown, and recent repo hikes.
+    detail: |
+      Each input is z-scored over the full sample, then averaged using fixed
+      weights (40% WACR spread, 20% G-Sec/Repo spread, 20% inverted bank
+      credit growth, 20% 6-month repo change). The composite z-score is
+      mapped linearly onto 0-100, where 50 represents average historical
+      conditions. Values below 30 indicate abundant liquidity historically
+      supportive of industrial activity; values above 65 indicate elevated
+      stress; values above 80 are severe and have coincided historically
+      with weak HRC and inventory destocking.
+    see_also: [WACR Spread, Liquidity Regime, Bank Credit YoY]
+
+  - term: Term Premium
+    category: macro
+    short: Extra yield demanded by investors for holding long-dated bonds rather than rolling short-term debt.
+    detail: |
+      Approximated by the G-Sec 10Y yield minus the policy repo rate.
+      Higher term premium = market demanding more compensation for duration
+      risk, typically driven by inflation worries, fiscal stress, or
+      foreign-flow uncertainty. A widening term premium during a tight
+      WACR regime is a "double stress" signal — short-term liquidity AND
+      long-term inflation risk both elevated.
+    see_also: [G-Sec 10Y, Repo Rate]
+
+  - term: VRR
+    full_name: Variable Rate Repo
+    category: macro
+    short: RBI's main short-term liquidity injection tool — auctions term repo funds to banks at market-determined rates.
+    detail: |
+      When banking-system liquidity is in deficit (WACR > Repo), the RBI
+      conducts VRR auctions to inject reserves. Banks bid for term funds
+      (typically 1-14 days) and the rate is determined by the auction.
+      The opposite operation — VRRR (Variable Rate Reverse Repo) — absorbs
+      surplus liquidity when WACR drifts below the repo rate. Not displayed
+      directly in this dashboard but the net effect of these operations
+      shows up in the WACR spread.
+
+  - term: Banking System Liquidity
+    category: macro
+    short: The aggregate net position of banks vis-à-vis the RBI — surplus when banks park funds, deficit when they borrow.
+    detail: |
+      Published daily by the RBI as the net LAF position (₹ crore). Surplus
+      shown as a positive number, deficit as negative. Not in this dashboard
+      directly (RBI publishes it in a different file format) but the same
+      information is captured indirectly via the WACR spread: persistent
+      negative WACR spread = system surplus; persistent positive = system
+      deficit.
+    see_also: [WACR Spread]

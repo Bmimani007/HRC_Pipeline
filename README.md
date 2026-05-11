@@ -45,6 +45,29 @@ The pipeline auto-detects new columns and includes them as drivers — no code e
 
 **Don't rename:** the `Month` column or the target columns (anything containing "HRC" in the header).
 
+### 💧 India: monthly liquidity update (extra 5 columns)
+
+The India sheet has 5 additional columns sourced from RBI publications: `WACR`, `Repo_Rate`,
+`GSec_10Y`, `CRR`, `Bank_Credit`. These feed the **💧 Liquidity** tab (India only) and the
+WACR_Spread driver flows into ARIMAX/ARDL models.
+
+Each month, download these RBI files and pull the latest values:
+
+| Column        | Source file                                     | How to compute                                  |
+|---------------|-------------------------------------------------|-------------------------------------------------|
+| `WACR`        | `Weighted_Average_Call_Money_Rates.xlsx`        | "Average" row for the FY × month                |
+| `Repo_Rate`   | `50_Macroeconomic_Indicators.xlsx` → Weekly     | Last weekly value of the month                  |
+| `GSec_10Y`    | `50_Macroeconomic_Indicators.xlsx` → Weekly     | Average of all weekly values in the month       |
+| `CRR`         | `50_Macroeconomic_Indicators.xlsx` → Weekly     | Last weekly value of the month                  |
+| `Bank_Credit` | `50_Macroeconomic_Indicators.xlsx` → Fortnightly| Last fortnightly value of the month (₹ Crore)   |
+
+Where to get the files:
+- **WACR**: RBI Database on Indian Economy (DBIE) → "Weighted Average Call Money Rates" report
+- **Other two**: RBI DBIE → "Macro-Economic Indicators - 50 Indicators" report
+
+Derived series (`WACR_Spread`, `Stress_Index`, `Liquidity_Regime`, `Policy_Regime`,
+`Bank_Credit_YoY`, etc.) are computed **automatically** by the pipeline — you don't enter them.
+
 ### 2. Refresh the report
 
 Open Terminal, navigate to the project folder, and run:
@@ -81,6 +104,7 @@ A browser tab opens automatically. Edit the Excel file, click 🔄 **Refresh dat
 | Attribution          | Rolling regression — driver importance over time                |
 | Events               | Pre/post analysis around key episodes (e.g., Ukraine war)       |
 | **Cross-Region**     | China vs India spread comparison                                |
+| 💧 **Liquidity**     | (Dashboard only, India only) — RBI policy stance, WACR spread, stress gauge, regime performance, lead-lag |
 
 The spread formula matches your Tata BPM deck:
 ```

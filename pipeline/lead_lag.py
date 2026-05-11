@@ -79,6 +79,11 @@ def granger_test(y: pd.Series, x: pd.Series, max_lag: int = 12,
 def lead_lag_summary(y: pd.Series, X: pd.DataFrame,
                      max_lag: int = 12, significance: float = 0.05) -> pd.DataFrame:
     """One-row-per-driver summary of CCF + Granger findings."""
+    empty = pd.DataFrame(columns=["driver", "best_lag_months", "ccf_at_best_lag",
+                                   "lead_lag_direction", "granger_x_causes_y",
+                                   "granger_min_pvalue", "granger_best_lag"])
+    if X is None or X.shape[1] == 0:
+        return empty
     rows = []
     for col in X.columns:
         x = X[col]
@@ -94,6 +99,8 @@ def lead_lag_summary(y: pd.Series, X: pd.DataFrame,
             "granger_min_pvalue": gc["min_pvalue"],
             "granger_best_lag": gc["best_lag"],
         })
+    if not rows:
+        return empty
     return pd.DataFrame(rows).sort_values(
         "ccf_at_best_lag", key=lambda s: s.abs(), ascending=False
     ).reset_index(drop=True)
