@@ -45,6 +45,36 @@ data:
         iron_ore_weight: 1.6
         hcc_column: "Import HCC (India CFR) INR/t"
         hcc_weight: 0.9
+      # ----------------------------------------------------------------------
+      # LIQUIDITY MODULE (India-only)
+      #
+      # When this block is present, the data loader pulls the listed
+      # base_columns from the India sheet and computes derived series:
+      #   WACR_Spread, GSec_Repo_Spread, Bank_Credit_YoY, Repo_6M_Change,
+      #   Stress_Index, Liquidity_Regime, Policy_Regime
+      #
+      # `driver_columns` lists which liquidity columns should be used as
+      # model drivers (ARIMAX/ARDL). All other liquidity columns are
+      # auxiliary — they appear in the Liquidity tab but NOT as drivers,
+      # which keeps VIF clean (WACR_Spread already captures the WACR vs Repo
+      # information so we don't add either raw rate as a driver).
+      #
+      # Monthly maintenance: add the new month's row in the India sheet with
+      # values for WACR, Repo_Rate, GSec_10Y, CRR, Bank_Credit. The pipeline
+      # computes everything derived automatically.
+      # ----------------------------------------------------------------------
+      liquidity:
+        base_columns:
+          - "WACR"           # Weighted Average Call Money Rate (%, official RBI series)
+          - "Repo_Rate"      # Policy Repo Rate (%, month-end)
+          - "GSec_10Y"       # 10-Year G-Sec yield (%, monthly average)
+          - "CRR"            # Cash Reserve Ratio (%, month-end)
+          - "Bank_Credit"    # Bank Credit outstanding (₹ Crore, fortnightly last)
+        driver_columns:
+          - "WACR_Spread"    # WACR − Repo (the cleanest liquidity-tightness signal)
+        regime_method: "std_band"      # 'std_band' / 'fixed' / 'rolling'
+        regime_band_width: 0.5         # for std_band: mean ± 0.5 × std
+        policy_lookback_months: 6      # for hiking/easing detection
 
     us:
       enabled: true

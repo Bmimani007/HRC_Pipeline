@@ -10,3 +10,4 @@ statsmodels>=0.14
 arch>=6.0
 plotly>=5.18
 streamlit>=1.30
+matplotlib>=3.7,<4.0
