@@ -75,6 +75,14 @@ def _analyse_region(region_data: RegionData, config: dict) -> Dict[str, Any]:
 
     out = {"meta": region_data.summary()}
 
+    # Expose the full region dataframe + liquidity column list to downstream
+    # consumers (specifically the HTML report builder, which needs to render
+    # the India Liquidity section). These keys are deliberately prefixed
+    # with an underscore to mark them as "internal pass-through" rather
+    # than analytical results — they should NOT be JSON-serialised verbatim.
+    out["_region_df"] = region_data.df
+    out["_liquidity_cols"] = list(region_data.liquidity_cols)
+
     df = pd.concat([region_data.y, region_data.X], axis=1)
 
     out["summary_stats"]   = _step("summary stats",     summary_stats, df)
@@ -196,7 +204,11 @@ def save_results_json(results: dict, path: str) -> None:
         if isinstance(obj, pd.Timestamp):
             return str(obj.date())
         if isinstance(obj, dict):
-            return {k: make_serializable(v) for k, v in obj.items()}
+            # Skip underscore-prefixed pass-through keys (e.g. "_region_df",
+            # "_liquidity_cols"). These are internal handoffs to the report
+            # builder, not analytical results meant for JSON consumers.
+            return {k: make_serializable(v) for k, v in obj.items()
+                    if not (isinstance(k, str) and k.startswith("_"))}
         if isinstance(obj, list):
             return [make_serializable(v) for v in obj]
         if hasattr(obj, "__dict__"):
