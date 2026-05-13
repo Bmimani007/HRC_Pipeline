@@ -3,7 +3,7 @@
 HRC Steel Pipeline — main entry point.
 
 Usage:
-    python3 run.py                    # uses config.yaml in current dir
+    python3 run.py # uses config.yaml in current dir
     python3 run.py path/to/config.yaml
 
 What it does:
@@ -34,8 +34,8 @@ from report.builder import build_report
 def main():
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     if not Path(config_path).exists():
-        print(f"❌ Config file not found: {config_path}")
-        print(f"   Make sure you're running this from the project folder.")
+        print(f"(fail) Config file not found: {config_path}")
+        print(f" Make sure you're running this from the project folder.")
         sys.exit(1)
 
     with open(config_path) as f:
@@ -47,13 +47,13 @@ def main():
     try:
         results = run_pipeline(config)
     except Exception as e:
-        print(f"\n❌ Pipeline failed: {type(e).__name__}: {e}")
+        print(f"\n(fail) Pipeline failed: {type(e).__name__}: {e}")
         print("\n--- Full traceback ---")
         traceback.print_exc()
         print("\nCheck that:")
-        print(f"  • The data file exists at: {config['data']['file']}")
-        print(f"  • The sheets and columns in the file match config.yaml")
-        print(f"  • All packages are installed: pip3 install -r requirements.txt")
+        print(f" • The data file exists at: {config['data']['file']}")
+        print(f" • The sheets and columns in the file match config.yaml")
+        print(f" • All packages are installed: pip3 install -r requirements.txt")
         sys.exit(1)
 
     # ---- Save JSON ---- (best-effort; never block the report on this)
@@ -62,17 +62,17 @@ def main():
         json_path = config["output"]["results_json"]
         save_results_json(results, json_path)
     except Exception as e:
-        print(f"  ⚠ Failed to save JSON: {type(e).__name__}: {e}")
-        print(f"     (continuing — JSON is only used by the dashboard)")
+        print(f" (!) Failed to save JSON: {type(e).__name__}: {e}")
+        print(f" (continuing — JSON is only used by the dashboard)")
 
     # ---- Build HTML report ---- (this MUST succeed; it's the user's deliverable)
-    print(f"  • Building HTML report...", end="", flush=True)
+    print(f" • Building HTML report...", end="", flush=True)
     t0 = time.time()
     report_path = config["output"]["report_path"]
     try:
         report_path = build_report(results, report_path)
-        print(f" ✓ ({time.time() - t0:.1f}s)")
-        print(f"  ✓ Report saved: {report_path}")
+        print(f" (ok) ({time.time() - t0:.1f}s)")
+        print(f" (ok) Report saved: {report_path}")
     except Exception as e:
         print(f" ✗ FAILED")
         # Write a minimal fallback HTML so something exists at the expected path.
@@ -104,18 +104,18 @@ pre {{ background: #F8FAFC; padding: 16px; border-radius: 6px; overflow-x: auto;
             Path(report_path).parent.mkdir(parents=True, exist_ok=True)
             with open(report_path, "w") as f:
                 f.write(fallback)
-            print(f"  → Wrote fallback report to {report_path} so you can see the error.")
+            print(f" → Wrote fallback report to {report_path} so you can see the error.")
         except Exception:
-            pass  # If even the fallback can't write, give up gracefully
+            pass # If even the fallback can't write, give up gracefully
         print(f"\n--- Report builder traceback ---")
         traceback.print_exc()
         sys.exit(1)
 
     print(f"\n{'─' * 70}")
-    print(f"✓ DONE")
+    print(f"(ok) DONE")
     print(f"{'─' * 70}")
-    print(f"\n  Open the report:    open {report_path}")
-    print(f"  Open the dashboard: streamlit run dashboard/app.py")
+    print(f"\n Open the report: open {report_path}")
+    print(f" Open the dashboard: streamlit run dashboard/app.py")
     print()
 
 

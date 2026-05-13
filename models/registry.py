@@ -11,7 +11,7 @@ In a model file:
 
 In the pipeline:
     from models.registry import build_models
-    instances = build_models(config)   # {model_name: instance}
+    instances = build_models(config) # {model_name: instance}
 """
 from __future__ import annotations
 import importlib
@@ -43,7 +43,7 @@ def _autodiscover():
         try:
             importlib.import_module(f"models.{module_info.name}")
         except Exception as e:
-            print(f"⚠ Could not load model module '{module_info.name}': {e}")
+            print(f"(!) Could not load model module '{module_info.name}': {e}")
 
 
 def list_available() -> list:
@@ -66,7 +66,7 @@ def build_models(config: dict, region: str = None) -> Dict[str, Model]:
         if not model_cfg.get("enabled", True):
             continue
         if model_name not in _REGISTRY:
-            print(f"⚠ Model '{model_name}' is in config but not registered. "
+            print(f"(!) Model '{model_name}' is in config but not registered. "
                   f"Available: {list_available()}")
             continue
         # Region filter

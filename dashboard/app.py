@@ -1,7 +1,7 @@
 """
 HRC Steel Pipeline — Live Dashboard
 
-Run with:    streamlit run dashboard/app.py
+Run with: streamlit run dashboard/app.py
 
 This dashboard:
     • Reads the same xlsx + config the pipeline reads
@@ -38,7 +38,7 @@ from pipeline.attribution import rolling_attribution
 # ---------- Page setup ----------
 st.set_page_config(
     page_title="HRC Steel Intelligence",
-    page_icon="📊",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -72,8 +72,8 @@ def _check_password() -> bool:
     is bypassed (no password prompt) so local development isn't disrupted.
 
     To set the password:
-      • Local:  create .streamlit/secrets.toml with: app_password = "your-pw"
-      • Cloud:  add app_password under "Secrets" in the Streamlit Cloud
+      • Local: create .streamlit/secrets.toml with: app_password = "your-pw"
+      • Cloud: add app_password under "Secrets" in the Streamlit Cloud
                 app settings → no code changes needed
     """
     # If no password is configured, skip the gate entirely (local dev mode)
@@ -327,8 +327,26 @@ def cached_garch(_region, region_key: str, horizon: int, file_mtime: float):
     return fit_garch_with_risk(_region.y, horizon=horizon)
 
 
+@st.cache_data(show_spinner="Running scenario...")
+def cached_scenario(_region, region_key: str, model_type: str,
+                      ar: int, d: int, ma: int, dl: int,
+                      horizon: int, drivers_tuple: tuple,
+                      shocks_tuple: tuple, file_mtime: float):
+    """Wrapper around run_arimax_scenario / run_ardl_scenario.
+    shocks_tuple is a sorted tuple of (driver_name, pct) for cache keying."""
+    from pipeline.forecasting import run_arimax_scenario, run_ardl_scenario
+    drivers = list(drivers_tuple) if drivers_tuple else None
+    shocks = dict(shocks_tuple) if shocks_tuple else {}
+    if model_type == "arimax":
+        return run_arimax_scenario(_region.y, _region.X, shocks=shocks,
+                                      ar=ar, d=d, ma=ma, horizon=horizon, drivers=drivers)
+    else:
+        return run_ardl_scenario(_region.y, _region.X, shocks=shocks,
+                                    ar=ar, dl=dl, horizon=horizon, drivers=drivers)
+
+
 # ---------- Render helper: convert narrator blocks to Streamlit HTML ----------
-def render_interpretation(blocks, label: str = "📝 Interpretation",
+def render_interpretation(blocks, label: str = "Interpretation",
                             settings_summary: str = None):
     """
     Render narrator output as a collapsible expander. Default collapsed.
@@ -337,7 +355,7 @@ def render_interpretation(blocks, label: str = "📝 Interpretation",
     """
     with st.expander(label, expanded=False):
         if settings_summary:
-            st.caption(f"⚙ {settings_summary}")
+            st.caption(f"{settings_summary}")
         for b in blocks:
             if isinstance(b, dict) and b.get("_kind") == "key_interpretation":
                 st.markdown(
@@ -379,11 +397,11 @@ def load_glossary():
 
 
 GLOSSARY_CATEGORIES = {
-    "statistical": ("📊", "Statistical concepts"),
-    "model": ("🧮", "Models"),
-    "hrc-domain": ("🔩", "HRC domain"),
-    "macro": ("🌍", "Macro"),
-    "dashboard": ("🎛", "Dashboard-specific"),
+    "statistical": ("", "Statistical concepts"),
+    "model": ("", "Models"),
+    "hrc-domain": ("", "HRC domain"),
+    "macro": ("", "Macro"),
+    "dashboard": ("", "Dashboard-specific"),
 }
 
 
@@ -528,7 +546,7 @@ def _build_report_html(file_hash: str, config_str: str) -> bytes:
 
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**📄 HTML Report**")
+st.sidebar.markdown("**HTML Report**")
 st.sidebar.caption(
     "Generates the full prose-heavy HTML report (all regions, all sections). "
     "First click takes 30-60s; subsequent downloads are instant."
@@ -548,7 +566,7 @@ if st.sidebar.button("Generate report", use_container_width=True):
 if "report_bytes" in st.session_state:
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     st.sidebar.download_button(
-        label="⬇ Download HTML report",
+        label="Download HTML report",
         data=st.session_state["report_bytes"],
         file_name=f"HRC_Steel_Report_{timestamp}.html",
         mime="text/html",
@@ -559,7 +577,7 @@ if "report_bytes" in st.session_state:
 
 # ---------- Sidebar Glossary Search ----------
 st.sidebar.markdown("---")
-st.sidebar.markdown("**📖 Glossary search**")
+st.sidebar.markdown("**Glossary search**")
 _glossary = load_glossary()
 if _glossary:
     search_query = st.sidebar.text_input(
@@ -586,7 +604,7 @@ if _glossary:
         if matches:
             st.sidebar.caption(f"{len(matches)} match{'es' if len(matches) != 1 else ''}")
             for m in matches[:5]:
-                with st.sidebar.expander(f"📘 {m['term']}", expanded=(len(matches) == 1)):
+                with st.sidebar.expander(f"{m['term']}", expanded=(len(matches) == 1)):
                     if m.get("full_name"):
                         st.markdown(f"**{m['full_name']}**")
                     st.markdown(f"*{m.get('short', '')}*")
@@ -693,7 +711,7 @@ if region_pick == "Cross-Region":
         try:
             render_interpretation(
                 narrator.narrate_cross_region_extended(cross),
-                label="📝 Cross-region interpretation",
+                label="Cross-region interpretation",
                 settings_summary=f"Regions: {', '.join(cross.regions_analysed).upper()} · "
                                   f"Common overlap: {cross.overlap_start} → {cross.overlap_end} "
                                   f"({cross.n_overlap}m) · Max lag: {cr_max_lag}m",
@@ -722,14 +740,14 @@ if region_pick == "Cross-Region":
                 lead_desc = "no clear leader"
 
             # Granger results
-            ga_b = (f"{p.granger_a_to_b_pvalue:.3f}{' ✓' if p.granger_a_to_b_pvalue and p.granger_a_to_b_pvalue < 0.05 else ''}"
+            ga_b = (f"{p.granger_a_to_b_pvalue:.3f}{' (ok)' if p.granger_a_to_b_pvalue and p.granger_a_to_b_pvalue < 0.05 else ''}"
                     if p.granger_a_to_b_pvalue is not None else "—")
-            gb_a = (f"{p.granger_b_to_a_pvalue:.3f}{' ✓' if p.granger_b_to_a_pvalue and p.granger_b_to_a_pvalue < 0.05 else ''}"
+            gb_a = (f"{p.granger_b_to_a_pvalue:.3f}{' (ok)' if p.granger_b_to_a_pvalue and p.granger_b_to_a_pvalue < 0.05 else ''}"
                     if p.granger_b_to_a_pvalue is not None else "—")
 
             # Cointegration result
             if p.cointegration_pvalue is not None:
-                coint_str = f"{p.cointegration_pvalue:.3f}{' ✓ cointegrated' if p.cointegrated else ''}"
+                coint_str = f"{p.cointegration_pvalue:.3f}{' (ok) cointegrated' if p.cointegrated else ''}"
             else:
                 coint_str = "—"
 
@@ -747,8 +765,8 @@ if region_pick == "Cross-Region":
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.caption(
             "**Best lag** sign convention: positive = first region (A) leads, "
-            "negative = second region (B) leads. **Granger ✓** = p < 0.05 "
-            "(statistical predictive precedence). **Cointegrated ✓** = p < 0.05 "
+            "negative = second region (B) leads. **Granger significant** = p < 0.05 "
+            "(statistical predictive precedence). **Cointegrated** = p < 0.05 "
             "(long-run equilibrium between price levels)."
         )
 
@@ -900,8 +918,8 @@ else:
     tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro = st.tabs([
         "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar"
     ])
-    tab_liquidity = None  # sentinel; tab body guards on this
-tab_glossary = None  # glossary is sidebar-only; tab body guarded
+    tab_liquidity = None # sentinel; tab body guards on this
+tab_glossary = None # glossary is sidebar-only; tab body guarded
 
 
 def _render_overview_only_placeholder(tab_name: str):
@@ -928,6 +946,161 @@ with tab_overview:
     fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440, yaxis_title=f"{currency}/t")
     style_axes(fig)
     st.plotly_chart(fig, use_container_width=True)
+
+    # ===== WHAT CHANGED — the Monday-morning glance panel =====
+    # Always-on. Tells the user in 30 seconds what's actually new since last
+    # month. Degrades cleanly for overview-only regions (no driver delta or
+    # spread percentile shown).
+    st.markdown("---")
+    st.subheader("What Changed")
+    _full_y = region.df[region.target].dropna()
+    _latest_date = _full_y.index[-1]
+    st.caption(f"Snapshot anchored on the latest observation. Data as of: "
+                 f"**{_latest_date.strftime('%b %Y')}** "
+                 f"({len(_full_y)} months of history).")
+
+    if len(_full_y) < 13:
+        st.info("Need at least 13 months of history to render the What Changed panel.")
+    else:
+        _last_px = float(_full_y.iloc[-1])
+        _prev_px = float(_full_y.iloc[-2])
+        _mom_abs = _last_px - _prev_px
+        _mom_pct = (_mom_abs / _prev_px * 100.0) if _prev_px else 0.0
+
+        _avg_3m = float(_full_y.iloc[-3:].mean())
+        _avg_12m = float(_full_y.iloc[-12:].mean())
+        _vs_3m_pct = (_last_px / _avg_3m - 1) * 100.0 if _avg_3m else 0.0
+        _vs_12m_pct = (_last_px / _avg_12m - 1) * 100.0 if _avg_12m else 0.0
+
+        # Row 1: price tiles
+        wc1, wc2, wc3, wc4 = st.columns(4)
+        wc1.metric("Latest price", f"{currency} {_last_px:,.0f}/t",
+                     f"{_mom_abs:+,.0f} MoM")
+        wc2.metric("MoM change", f"{_mom_pct:+.1f}%",
+                     help="Month-on-month % change in HRC price.")
+        wc3.metric("vs 3M avg", f"{_vs_3m_pct:+.1f}%",
+                     help=f"Latest price vs trailing 3-month average ({currency} {_avg_3m:,.0f}/t).")
+        wc4.metric("vs 12M avg", f"{_vs_12m_pct:+.1f}%",
+                     help=f"Latest price vs trailing 12-month average ({currency} {_avg_12m:,.0f}/t).")
+
+        # Row 2: drivers + spread (only when available)
+        _row2_items = []
+
+        # Biggest driver mover (skip if overview-only / no drivers).
+        # Uses z-score of MoM change vs that driver's own history — works
+        # cleanly for all drivers regardless of whether they're prices,
+        # rates, indices, or spreads that can flip sign. Falls back to
+        # % change for display where the driver is strictly positive
+        # (prices, indices) and to absolute change for drivers that can
+        # cross zero (rates, spreads).
+        _biggest_drv = None
+        _biggest_drv_label = ""
+        _biggest_drv_z = 0.0
+        if not _overview_only and len(region.drivers) > 0:
+            _drv_movers = []
+            for d_ in region.drivers:
+                _s = region.df[d_].dropna()
+                if len(_s) < 13:
+                    continue
+                _diff = _s.diff().dropna()
+                _std = float(_diff.std())
+                if _std <= 0 or not np.isfinite(_std):
+                    continue
+                _last_diff = float(_diff.iloc[-1])
+                _z = _last_diff / _std
+                _v0, _v1 = float(_s.iloc[-2]), float(_s.iloc[-1])
+                # Decide display format: % only if series is strictly positive
+                _all_positive = (_s.min() > 0)
+                if _all_positive and _v0 != 0:
+                    _label = f"{(_v1/_v0 - 1)*100.0:+.1f}% MoM"
+                else:
+                    _label = f"{_last_diff:+,.2f} MoM (abs)"
+                _drv_movers.append((d_, _z, _label, _v0, _v1))
+            if _drv_movers:
+                _biggest_drv = max(_drv_movers, key=lambda r: abs(r[1]))
+                _biggest_drv_label = _biggest_drv[2]
+                _biggest_drv_z = _biggest_drv[1]
+
+        # Spread percentile (China/India only — need spread_config)
+        _spread_pct_now = None
+        _spread_pct_prev = None
+        _spread_now_value = None
+        try:
+            if not _overview_only and region.spread_config:
+                _sp_result = cached_spread(region, f"{region_pick}_full", file_mtime)
+                if _sp_result is not None:
+                    _sp = _sp_result.spread_series.dropna()
+                    if len(_sp) >= 13:
+                        _sp_now = float(_sp.iloc[-1])
+                        _sp_prev = float(_sp.iloc[-2])
+                        _sp_arr = _sp.values
+                        _spread_pct_now = float((_sp_arr <= _sp_now).mean() * 100.0)
+                        _spread_pct_prev = float((_sp_arr <= _sp_prev).mean() * 100.0)
+                        _spread_now_value = _sp_now
+        except Exception:
+            pass
+
+        if _biggest_drv is not None or _spread_pct_now is not None:
+            wc5, wc6, wc7 = st.columns(3)
+            if _biggest_drv is not None:
+                _drv_name, _z, _label_text, _drv_prev, _drv_now = _biggest_drv
+                _drv_display = _drv_name if len(_drv_name) <= 24 else _drv_name[:22] + "…"
+                wc5.metric(f"Biggest driver mover", _drv_display,
+                             _label_text,
+                             help=f"Driver whose MoM move was largest in z-score terms "
+                                  f"(how unusual vs that driver's own monthly volatility). "
+                                  f"Z-score this month: {_z:+.2f}σ. "
+                                  f"Full name: {_drv_name}. "
+                                  f"Latest: {_drv_now:,.2f}, previous: {_drv_prev:,.2f}.")
+            else:
+                wc5.metric("Biggest driver mover", "—", help="No driver data available for this region.")
+
+            if _spread_pct_now is not None:
+                _pct_delta = _spread_pct_now - _spread_pct_prev
+                wc6.metric("Spread percentile", f"P{_spread_pct_now:.0f}",
+                             f"{_pct_delta:+.0f} pts MoM",
+                             help="Where current Tata BPM spread sits in its own history "
+                                  "(P50 = median, P90 = top decile). Higher = stronger margin.")
+                wc7.metric("Spread level", f"{currency} {_spread_now_value:,.0f}/t",
+                             help="Latest HRC − 1.6×IO − 0.9×HCC spread value.")
+            else:
+                wc6.metric("Spread percentile", "—", help="Spread analysis not configured for this region.")
+
+        # The one-line "what flipped" callout — generated dynamically
+        _flips = []
+        # 1. Direction flip vs trend
+        if _mom_pct > 0 and _vs_12m_pct < -2:
+            _flips.append(f"Price ticked up {_mom_pct:+.1f}% MoM but is still {_vs_12m_pct:.1f}% below 12M avg — early reversal or noise?")
+        elif _mom_pct < 0 and _vs_12m_pct > 2:
+            _flips.append(f"Price pulled back {_mom_pct:.1f}% MoM but remains {_vs_12m_pct:+.1f}% above 12M avg — pause in uptrend.")
+        elif abs(_mom_pct) > 5:
+            _flips.append(f"Notable {_mom_pct:+.1f}% MoM move — outside typical monthly range.")
+
+        # 2. Spread percentile shifts
+        if _spread_pct_now is not None and _spread_pct_prev is not None:
+            _pdelta = _spread_pct_now - _spread_pct_prev
+            if _spread_pct_now < 25 and _pdelta < -10:
+                _flips.append(f"Spread dropped to P{_spread_pct_now:.0f} (down {abs(_pdelta):.0f} pts) — margin compression accelerating.")
+            elif _spread_pct_now > 75 and _pdelta > 10:
+                _flips.append(f"Spread climbed to P{_spread_pct_now:.0f} (up {_pdelta:.0f} pts) — margin expansion accelerating.")
+            elif _spread_pct_now < 25:
+                _flips.append(f"Spread sitting at P{_spread_pct_now:.0f} of history — bottom-quartile margin environment.")
+            elif _spread_pct_now > 75:
+                _flips.append(f"Spread sitting at P{_spread_pct_now:.0f} of history — top-quartile margin environment.")
+
+        # 3. Driver outsized move — z-score above 2σ flags a genuinely unusual move
+        if _biggest_drv is not None and abs(_biggest_drv_z) >= 2.0:
+            _drv_name = _biggest_drv[0]
+            _flips.append(f"{_drv_name} moved {_biggest_drv_label} ({_biggest_drv_z:+.1f}σ event) — large input shock, watch for HRC pass-through over next 1-3 months.")
+
+        if _flips:
+            st.markdown("**Headline reads:**")
+            for _f in _flips:
+                st.markdown(f"- {_f}")
+        else:
+            st.caption("No major flips this month — prices, drivers and spread broadly in line with recent trend.")
+
+    st.markdown("---")
 
     st.subheader("Drivers")
     n_cols = 2
@@ -960,7 +1133,7 @@ with tab_spread:
             # Live interpretation panel (collapsed by default)
             render_interpretation(
                 narrator.narrate_spread(spread, currency),
-                label="📝 Spread interpretation",
+                label="Spread interpretation",
                 settings_summary=f"Region: {region_pick.title()}, Currency: {currency}",
             )
 
@@ -1057,7 +1230,7 @@ with tab_lead_lag:
                 target_name = filt_region.y.name if hasattr(filt_region.y, "name") else "HRC"
                 render_interpretation(
                     narrator.narrate_lead_lag(ll, target_name),
-                    label="📝 Lead/Lag interpretation",
+                    label="Lead/Lag interpretation",
                     settings_summary=f"Region: {region_pick.title()}, Max lag: ±{max_lag}m, "
                                       f"Drivers selected: {len(selected_drivers)}",
                 )
@@ -1098,7 +1271,7 @@ with tab_regimes:
             try:
                 render_interpretation(
                     narrator.narrate_regimes(regimes, currency),
-                    label="📝 Regimes interpretation",
+                    label="Regimes interpretation",
                     settings_summary=f"Region: {region_pick.title()}, Regimes: {n_reg}, "
                                       f"Drivers: {len(selected_drivers)}",
                 )
@@ -1141,7 +1314,7 @@ with tab_cyclicity:
         try:
             render_interpretation(
                 narrator.narrate_cyclicity(cyc, currency),
-                label="📝 Cyclicity interpretation",
+                label="Cyclicity interpretation",
                 settings_summary=f"Region: {region_pick.title()}, GMM regimes: {n_cyc}",
             )
         except Exception:
@@ -1261,7 +1434,7 @@ with tab_attribution:
                 try:
                     render_interpretation(
                         narrator.narrate_attribution(attr, currency),
-                        label="📝 Attribution interpretation",
+                        label="Attribution interpretation",
                         settings_summary=f"Region: {region_pick.title()}, "
                                           f"Rolling window: {window}m, "
                                           f"Drivers: {len(selected_drivers)}",
@@ -1386,11 +1559,11 @@ with tab_forecast:
             def _render_fit(fit_result, label, color):
                 """Render one model fit's outputs."""
                 if not fit_result.success:
-                    st.error(f"❌ **{label} failed**: {fit_result.error_msg}")
+                    st.error(f"(fail) **{label} failed**: {fit_result.error_msg}")
                     st.caption(f"Configuration: {fit_result.config_summary}")
                     return
 
-                st.success(f"✓ **{label}** — {fit_result.config_summary}")
+                st.success(f"(ok) **{label}** — {fit_result.config_summary}")
 
                 # Metrics row
                 m1, m2, m3, m4, m5 = st.columns(5)
@@ -1402,7 +1575,7 @@ with tab_forecast:
 
                 # Ljung-Box residual diagnostic
                 if fit_result.ljung_box_p is not None:
-                    lb_status = "✓ no autocorrelation" if fit_result.ljung_box_p > 0.05 else "⚠ residual autocorrelation present"
+                    lb_status = "(ok) no autocorrelation" if fit_result.ljung_box_p > 0.05 else "(!) residual autocorrelation present"
                     st.caption(f"Ljung-Box test (10 lags): p = {fit_result.ljung_box_p:.3f} → {lb_status}")
 
                 # Forecast chart
@@ -1476,7 +1649,7 @@ with tab_forecast:
                 try:
                     render_interpretation(
                         narrator.narrate_model_fit(fit_arx, "ARIMAX", selected_drivers, currency),
-                        label="📝 ARIMAX interpretation",
+                        label="ARIMAX interpretation",
                         settings_summary=f"AR={ar_arx}, d={d_arx}, MA={ma_arx}, "
                                           f"horizon={forecast_horizon}m, "
                                           f"{len(selected_drivers)} drivers",
@@ -1490,14 +1663,14 @@ with tab_forecast:
                 try:
                     render_interpretation(
                         narrator.narrate_model_fit(fit_ardl, "ARDL", selected_drivers, currency),
-                        label="📝 ARDL interpretation",
+                        label="ARDL interpretation",
                         settings_summary=f"AR={ar_ardl}, DL={dl_ardl}, "
                                           f"horizon={forecast_horizon}m, "
                                           f"{len(selected_drivers)} drivers",
                     )
                 except Exception:
                     pass
-            else:  # Both (compare)
+            else: # Both (compare)
                 fit_arx = cached_arimax(region, f"{region_pick}", ar_arx, d_arx, ma_arx,
                                           forecast_horizon, drivers_tuple, file_mtime)
                 fit_ardl_r = cached_ardl(region, f"{region_pick}", ar_ardl, dl_ardl,
@@ -1515,12 +1688,12 @@ with tab_forecast:
                             "R²": f"{fit_res.r2:.3f}",
                             "AIC": f"{fit_res.aic:.0f}",
                             "BIC": f"{fit_res.bic:.0f}",
-                            "Status": "✓",
+                            "Status": "(ok)",
                         })
                     else:
                         comp_data.append({
                             "Model": name, "RMSE": "—", "MAPE %": "—", "R²": "—",
-                            "AIC": "—", "BIC": "—", "Status": "❌",
+                            "AIC": "—", "BIC": "—", "Status": "(fail)",
                         })
                 st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
 
@@ -1538,7 +1711,7 @@ with tab_forecast:
                     both_blocks.extend(narrator.narrate_model_fit(fit_ardl_r, "ARDL", selected_drivers, currency))
                     render_interpretation(
                         both_blocks,
-                        label="📝 Combined ARIMAX + ARDL interpretation",
+                        label="Combined ARIMAX + ARDL interpretation",
                         settings_summary=f"ARIMAX({ar_arx},{d_arx},{ma_arx}) vs "
                                           f"ARDL(ar={ar_ardl}, dl={dl_ardl}), "
                                           f"horizon={forecast_horizon}m, "
@@ -1546,6 +1719,262 @@ with tab_forecast:
                     )
                 except Exception:
                     pass
+
+
+            # ===== SECTION A.5: Scenarios — driver shock forecasts =====
+            st.markdown("---")
+            st.markdown("#### Scenarios · Driver Shock Forecasts")
+            st.caption(
+                "Apply a one-time % shift to selected drivers and project that shifted level "
+                "forward across the forecast horizon. The model is refit on actual history "
+                "(no contamination) and compared against the base case (drivers held flat at "
+                "their latest values). This isolates the question: *what does the model say "
+                "if iron ore drops 15%, or coking coal spikes 20%?*"
+            )
+            st.warning(
+                "**Read the output as directional, not precise.** Scenarios apply isolated "
+                "driver shocks. In reality, big moves usually come bundled — a 15% iron-ore "
+                "drop typically arrives with a demand slowdown that also drags coking coal "
+                "and HRC. The model can't know that. Use these outputs to size *which* "
+                "direction matters and *how much* a single driver could push price, not to "
+                "produce a tradable forecast.",
+                icon=None,
+            )
+
+            # Pick the scenario model — default to ARIMAX since it tends to fit faster
+            sc_c1, sc_c2 = st.columns([1, 1])
+            with sc_c1:
+                sc_model = st.selectbox(
+                    "Scenario model", ["ARIMAX", "ARDL"], key="fc_sc_model",
+                    help="Which model to use for scenario forecasts. Orders are taken from "
+                         "the Section A sliders above. Run both to see how transmission "
+                         "speed differs."
+                )
+            with sc_c2:
+                st.metric("Forecast horizon",
+                           f"{forecast_horizon} months",
+                           help="Inherited from Section A's horizon slider.")
+
+            # Driver shock sliders — one per selected driver
+            st.markdown("**Driver shocks** (one-time % shift applied to latest value, then held)")
+            _shocks: dict = {}
+            # 2-column grid for slider layout
+            _drv_for_shocks = list(selected_drivers)
+            _shock_cols_per_row = 2
+            for _i in range(0, len(_drv_for_shocks), _shock_cols_per_row):
+                _scols = st.columns(_shock_cols_per_row)
+                for _j, _sc in enumerate(_scols):
+                    if _i + _j >= len(_drv_for_shocks):
+                        continue
+                    _d = _drv_for_shocks[_i + _j]
+                    with _sc:
+                        # Truncate display name
+                        _disp = _d if len(_d) <= 36 else _d[:34] + "…"
+                        _shock_val = st.slider(
+                            _disp,
+                            min_value=-30.0, max_value=30.0,
+                            value=0.0, step=1.0,
+                            key=f"fc_sc_shock_{region_pick}_{_d}",
+                            format="%+.0f%%",
+                            help=f"% shift applied to {_d}'s latest value. "
+                                 f"Held constant at the shifted level across the horizon."
+                        )
+                        if abs(_shock_val) > 0.01:
+                            _shocks[_d] = float(_shock_val)
+
+            # Quick-reset
+            _rc1, _rc2 = st.columns([1, 5])
+            with _rc1:
+                if st.button("Reset all shocks", key="fc_sc_reset",
+                               help="Set every shock slider back to 0%."):
+                    for _d in _drv_for_shocks:
+                        _k = f"fc_sc_shock_{region_pick}_{_d}"
+                        if _k in st.session_state:
+                            st.session_state[_k] = 0.0
+                    st.rerun()
+            with _rc2:
+                if not _shocks:
+                    st.caption("No shocks applied — base forecast only will be shown. Move any slider to apply a shock.")
+                else:
+                    _summary = ", ".join(f"{k}: {v:+.0f}%" for k, v in _shocks.items())
+                    st.caption(f"Applied: {_summary}")
+
+            if st.button("Run scenario", key="fc_sc_run", type="primary",
+                           help="Refit the model on actual history and produce base + "
+                                "shocked forecasts."):
+                _shocks_tuple = tuple(sorted(_shocks.items())) if _shocks else tuple()
+                _sc_result = cached_scenario(
+                    region, region_pick, sc_model.lower(),
+                    ar_arx, d_arx, ma_arx, dl_ardl,
+                    forecast_horizon, drivers_tuple, _shocks_tuple, file_mtime
+                )
+                st.session_state["fc_sc_result"] = _sc_result
+                st.session_state["fc_sc_shocks_applied"] = dict(_shocks)
+                st.session_state["fc_sc_model_used"] = sc_model
+
+            if "fc_sc_result" in st.session_state:
+                _sc = st.session_state["fc_sc_result"]
+                _shocks_applied = st.session_state.get("fc_sc_shocks_applied", {})
+                _model_used = st.session_state.get("fc_sc_model_used", sc_model)
+
+                if not _sc.success:
+                    st.error(f"Scenario run failed: {_sc.error_msg}")
+                else:
+                    # Headline metrics
+                    _bf = _sc.base_forecast
+                    _shf = _sc.shocked_forecast
+                    _last_actual = float(_sc.recent_actuals.iloc[-1])
+
+                    # 3M ahead delta (or use horizon-end if horizon < 3)
+                    _idx_3m = min(2, len(_bf) - 1)
+                    _idx_end = len(_bf) - 1
+
+                    _base_3m = float(_bf.iloc[_idx_3m])
+                    _sh_3m = float(_shf.iloc[_idx_3m])
+                    _delta_3m = _sh_3m - _base_3m
+
+                    _base_end = float(_bf.iloc[_idx_end])
+                    _sh_end = float(_shf.iloc[_idx_end])
+                    _delta_end = _sh_end - _base_end
+
+                    st.markdown(f"##### Result ({_model_used})")
+
+                    sm1, sm2, sm3, sm4 = st.columns(4)
+                    sm1.metric("Latest actual",
+                                 f"{currency} {_last_actual:,.0f}/t",
+                                 help=f"Most recent observed HRC price ({_sc.recent_actuals.index[-1].strftime('%b %Y')}).")
+                    sm2.metric(f"Base {min(3, forecast_horizon)}M",
+                                 f"{currency} {_base_3m:,.0f}/t",
+                                 f"{(_base_3m - _last_actual):+,.0f} vs actual",
+                                 help=f"Forecast for {_bf.index[_idx_3m].strftime('%b %Y')} "
+                                      f"with drivers held flat at their latest values.")
+                    sm3.metric(f"Shocked {min(3, forecast_horizon)}M",
+                                 f"{currency} {_sh_3m:,.0f}/t",
+                                 f"{_delta_3m:+,.0f} vs base",
+                                 help=f"Forecast for {_shf.index[_idx_3m].strftime('%b %Y')} "
+                                      f"with shocks applied.")
+                    sm4.metric(f"Delta at horizon ({forecast_horizon}M)",
+                                 f"{_delta_end:+,.0f} {currency}/t",
+                                 f"{(_delta_end / _base_end * 100):+.1f}%" if _base_end else "—",
+                                 help=f"Difference between shocked and base case at the "
+                                      f"end of the forecast horizon ({_bf.index[_idx_end].strftime('%b %Y')}).")
+
+                    # Side-by-side comparison chart
+                    st.markdown("##### Base vs Shocked forecast")
+                    _fig = go.Figure()
+                    # Recent actuals
+                    _fig.add_trace(go.Scatter(
+                        x=_sc.recent_actuals.index, y=_sc.recent_actuals.values,
+                        mode="lines+markers", name="Actual (last 12M)",
+                        line=dict(color="#1F4E79", width=2.2),
+                    ))
+                    # Base forecast
+                    _fig.add_trace(go.Scatter(
+                        x=_bf.index, y=_bf.values,
+                        mode="lines+markers", name="Base forecast",
+                        line=dict(color="#6B7280", width=2, dash="dot"),
+                    ))
+                    # Shocked forecast (only meaningful if shocks present)
+                    if _shocks_applied:
+                        _fig.add_trace(go.Scatter(
+                            x=_shf.index, y=_shf.values,
+                            mode="lines+markers", name="Shocked forecast",
+                            line=dict(color="#B91C1C", width=2.4),
+                        ))
+                        # Fill between base and shocked to make delta visually obvious
+                        _fig.add_trace(go.Scatter(
+                            x=list(_bf.index) + list(_bf.index[::-1]),
+                            y=list(_shf.values) + list(_bf.values[::-1]),
+                            fill="toself", fillcolor="rgba(185,28,28,0.08)",
+                            line=dict(color="rgba(0,0,0,0)"),
+                            hoverinfo="skip", showlegend=False,
+                        ))
+                    _fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=420,
+                                          yaxis_title=f"{currency}/t",
+                                          legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+                    style_axes(_fig)
+                    st.plotly_chart(_fig, use_container_width=True)
+
+                    # Per-month table
+                    st.markdown("##### Forecast table")
+                    _tbl = pd.DataFrame({
+                        "Month": [d.strftime("%b %Y") for d in _bf.index],
+                        f"Base ({currency}/t)": [f"{v:,.0f}" for v in _bf.values],
+                        f"Shocked ({currency}/t)": [f"{v:,.0f}" for v in _shf.values],
+                        f"Δ ({currency}/t)": [f"{(s - b):+,.0f}" for s, b in zip(_shf.values, _bf.values)],
+                        "Δ %": [f"{((s - b) / b * 100):+.1f}%" if b else "—" for s, b in zip(_shf.values, _bf.values)],
+                    })
+                    st.dataframe(_tbl, use_container_width=True, hide_index=True)
+
+                    # Interpretation block
+                    _interp_blocks = []
+                    if not _shocks_applied:
+                        _interp_blocks.append(
+                            "No shocks applied — base and shocked forecasts are identical. "
+                            "Move any driver slider away from 0% and re-run to see scenario impact."
+                        )
+                    else:
+                        _shock_list = ", ".join(f"**{k}** {v:+.0f}%" for k, v in _shocks_applied.items())
+                        _direction = "below" if _delta_end < 0 else "above"
+                        _interp_blocks.append(
+                            f"With {_shock_list} applied as one-time level shifts, the {_model_used} "
+                            f"model places HRC at **{currency} {_sh_end:,.0f}/t** by "
+                            f"{_shf.index[-1].strftime('%b %Y')} — "
+                            f"**{abs(_delta_end):,.0f} {currency}/t {_direction}** the base case "
+                            f"({(_delta_end / _base_end * 100):+.1f}%)."
+                        )
+                        # Magnitude framing
+                        _last_actual_abs = abs(_last_actual) if _last_actual else 1.0
+                        _pct_of_actual = abs(_delta_end) / _last_actual_abs * 100.0
+                        if _pct_of_actual < 2.0:
+                            _interp_blocks.append(
+                                "**Interpretation: low sensitivity.** The model implies HRC barely "
+                                "moves in response to this shock combination — coefficients on the "
+                                "shocked drivers are small relative to the AR dynamics, or the "
+                                "shocks partially offset each other."
+                            )
+                        elif _pct_of_actual < 8.0:
+                            _interp_blocks.append(
+                                "**Interpretation: moderate sensitivity.** The shock combination "
+                                "moves HRC by single-digit percentage of the current price level. "
+                                "This is within the band of typical monthly noise — the signal is "
+                                "real but not dominating."
+                            )
+                        else:
+                            _interp_blocks.append(
+                                "**Interpretation: high sensitivity.** The shock combination moves "
+                                "HRC by more than 8% of the current price level. If you believe "
+                                "the shock is plausible, this is a material risk worth flagging "
+                                "to commercial teams."
+                            )
+                        # Speed of transmission — compare 3M delta to horizon-end delta
+                        if abs(_delta_end) > 1.0:
+                            _speed = _delta_3m / _delta_end
+                            if _speed > 0.7:
+                                _interp_blocks.append(
+                                    f"**Transmission speed: fast.** ~{_speed*100:.0f}% of the "
+                                    f"horizon-end delta has already propagated by month 3, "
+                                    f"meaning the model expects price to respond quickly."
+                                )
+                            elif _speed > 0.3:
+                                _interp_blocks.append(
+                                    f"**Transmission speed: gradual.** ~{_speed*100:.0f}% of the "
+                                    f"horizon-end delta has propagated by month 3. The full "
+                                    f"impact builds over several months."
+                                )
+                            else:
+                                _interp_blocks.append(
+                                    f"**Transmission speed: slow.** Only ~{_speed*100:.0f}% of "
+                                    f"the horizon-end delta is visible by month 3. The bulk of "
+                                    f"the impact materialises later in the horizon — useful "
+                                    f"context for timing decisions."
+                                )
+
+                    render_interpretation(
+                        _interp_blocks,
+                        label="Scenario interpretation",
+                        settings_summary=_sc.config_summary,
+                    )
 
 
             # ===== SECTION B: Out-of-Sample Test =====
@@ -1629,8 +2058,8 @@ with tab_forecast:
 
                     # Ljung-Box on training residuals
                     if oos.ljung_box_p is not None:
-                        lb_status = ("✓ no residual autocorrelation" if oos.ljung_box_p > 0.05
-                                      else "⚠ residual autocorrelation present in training")
+                        lb_status = ("(ok) no residual autocorrelation" if oos.ljung_box_p > 0.05
+                                      else "(!) residual autocorrelation present in training")
                         st.caption(f"Training-residual Ljung-Box (10 lags): "
                                     f"p = {oos.ljung_box_p:.3f} → {lb_status}")
 
@@ -1798,7 +2227,7 @@ with tab_forecast:
                     try:
                         render_interpretation(
                             interp_blocks,
-                            label="📝 Out-of-sample test interpretation",
+                            label="Out-of-sample test interpretation",
                             settings_summary=f"{oos.model_type} {oos.config_summary}, "
                                               f"test window={oos.n_test}m, "
                                               f"{len(selected_drivers)} drivers",
@@ -1825,7 +2254,7 @@ with tab_forecast:
                     render_interpretation(
                         narrator.narrate_garch_dashboard(g, currency,
                                                             latest_price=float(region.y.iloc[-1])),
-                        label="📝 GARCH / risk interpretation",
+                        label="GARCH / risk interpretation",
                         settings_summary=f"Region: {region_pick.title()}, "
                                           f"Forecast horizon: {forecast_horizon}m",
                     )
@@ -1839,8 +2268,7 @@ with tab_forecast:
                 gm2.metric("Half-life", f"{g.half_life_months:.1f}m" if g.half_life_months and not np.isinf(g.half_life_months) else "∞",
                              help="Months until a vol shock decays to half its initial size.")
                 gm3.metric("Current vol percentile", f"P{g.vol_percentile:.0f}")
-                regime_emoji = {"low": "🟢", "normal": "⚪", "elevated": "🟠", "extreme": "🔴"}.get(g.regime_label, "⚪")
-                gm4.metric("Volatility regime", f"{regime_emoji} {g.regime_label.upper()}")
+                gm4.metric("Volatility regime", g.regime_label.upper())
 
                 # ----- View 1: Fan chart -----
                 st.markdown("##### View 1 — Volatility fan chart")
@@ -1869,7 +2297,7 @@ with tab_forecast:
                     for k_sigma, alpha_fill in [(3, 0.10), (2, 0.18), (1, 0.30)]:
                         # cumulative vol grows with sqrt(h) — multiply by sqrt(h)
                         horizon_steps = np.arange(1, len(point_fc) + 1)
-                        vol_h = g.forecast_vol.values[: len(point_fc)] / 100.0  # to decimal
+                        vol_h = g.forecast_vol.values[: len(point_fc)] / 100.0 # to decimal
                         # The vol forecast is for log-returns; scale to price space
                         last_price = float(target.iloc[-1])
                         band_pct = k_sigma * vol_h * np.sqrt(horizon_steps)
@@ -2018,8 +2446,8 @@ with tab_macro:
                     f"(all outside the current window).")
     else:
         st.markdown(f"#### {cal.window_description}")
-        st.caption(f"Window: **{cal.window_start}** to **{cal.window_end}**  ·  "
-                    f"Library: {cal.n_total_in_library} total events  ·  "
+        st.caption(f"Window: **{cal.window_start}** to **{cal.window_end}** ·  "
+                    f"Library: {cal.n_total_in_library} total events ·  "
                     f"Filtered to window: {len(cal.events)}")
 
         c1, c2, c3, c4 = st.columns(4)
@@ -2059,7 +2487,7 @@ with tab_macro:
             past_msg = f", incl. {past_days}d past" if show_past else ""
             render_interpretation(
                 intro_blocks,
-                label="📝 Calendar overview interpretation",
+                label="Calendar overview interpretation",
                 settings_summary=f"Window: {window_days}d forward{past_msg}, "
                                   f"{len(filtered_events)} events shown",
             )
@@ -2103,7 +2531,7 @@ with tab_macro:
                 <div style="font-size:1.0rem; font-weight:600; margin:8px 0 4px;
                             color:#1A1F2E;">{ev.name}</div>
                 <div style="font-size:0.8rem; color:#5C6B7F;">
-                    {ev.days_until} days from today  ·  {ev.consensus}
+                    {ev.days_until} days from today ·  {ev.consensus}
                 </div>
                 </div>""",
                 unsafe_allow_html=True,
@@ -2111,7 +2539,7 @@ with tab_macro:
 
             # Use expander for the detail content
             with st.expander("Details: mechanism, reaction, analogues", expanded=False):
-                st.markdown(f"**Affects:** {', '.join(r.title() for r in ev.affects_regions)}  ·  "
+                st.markdown(f"**Affects:** {', '.join(r.title() for r in ev.affects_regions)} ·  "
                             f"**Channel:** {ev.primary_channel.replace('_', ' ').title()}")
                 st.markdown(f"**Mechanism:**")
                 st.write(ev.mechanism)
@@ -2150,7 +2578,7 @@ if tab_liquidity is not None:
                 summarize_current_state, interpret_current_state, regime_periods,
             )
 
-            rdf = region.df  # convenience alias
+            rdf = region.df # convenience alias
 
             st.subheader("India Liquidity Monitor")
             st.markdown(
@@ -2267,10 +2695,10 @@ if tab_liquidity is not None:
                         'bgcolor': "white",
                         'borderwidth': 1, 'bordercolor': COLORS["rule"],
                         'steps': [
-                            {'range': [0, 30],   'color': '#C7E8D2'},
-                            {'range': [30, 50],  'color': '#E6F1E8'},
-                            {'range': [50, 65],  'color': '#F5F1E5'},
-                            {'range': [65, 80],  'color': '#F7DCC2'},
+                            {'range': [0, 30], 'color': '#C7E8D2'},
+                            {'range': [30, 50], 'color': '#E6F1E8'},
+                            {'range': [50, 65], 'color': '#F5F1E5'},
+                            {'range': [65, 80], 'color': '#F7DCC2'},
                             {'range': [80, 100], 'color': '#F2BFC0'},
                         ],
                         'threshold': {
@@ -2338,7 +2766,7 @@ if tab_liquidity is not None:
                 REGIME_COLOURS = {
                     'Surplus': 'rgba(45, 106, 79, 0.12)',
                     'Neutral': 'rgba(92, 107, 127, 0.08)',
-                    'Tight':   'rgba(164, 22, 26, 0.12)',
+                    'Tight': 'rgba(164, 22, 26, 0.12)',
                 }
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -2523,7 +2951,7 @@ if tab_liquidity is not None:
                                 idx_max = row.abs().idxmax()
                                 lag_k = int(idx_max.replace('lag_', '').replace('m', ''))
                                 corr = row[idx_max]
-                                if abs(corr) >= 0.15:  # only report meaningful signals
+                                if abs(corr) >= 0.15: # only report meaningful signals
                                     direction = "leads" if lag_k > 0 else "is contemporaneous with" if lag_k == 0 else "lags"
                                     sign = "negative" if corr < 0 else "positive"
                                     findings.append(
@@ -2624,7 +3052,7 @@ if tab_liquidity is not None:
 # be re-enabled by simply restoring the tab in the st.tabs() declaration above.
 if tab_glossary is not None:
     with tab_glossary:
-        st.markdown("### 📖 Glossary")
+        st.markdown("### Glossary")
         st.caption(
             "Reference for every term used in the dashboard. Search by typing in the "
             "sidebar search box, or browse by category below. Click any entry to expand."
@@ -2694,12 +3122,12 @@ if tab_glossary is not None:
                                 valid = [t for t in entry["see_also"] if t.lower() in glossary]
                                 if valid:
                                     st.caption(f"See also: {' · '.join(valid)}")
-                st.markdown("")  # spacing between categories
+                st.markdown("") # spacing between categories
 
 
     # Sidebar footer
     st.sidebar.markdown("---")
     st.sidebar.caption("**Workflow**")
     st.sidebar.caption("1. Edit `data/Raw_data.xlsx`")
-    st.sidebar.caption("2. Click 🔄 Refresh data above")
+    st.sidebar.caption("2. Click Refresh data above")
     st.sidebar.caption("3. To regenerate the static report: `python3 run.py`")

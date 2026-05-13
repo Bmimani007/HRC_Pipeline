@@ -545,3 +545,220 @@ def fit_garch_with_risk(target: pd.Series,
     except Exception as e:
         return GarchResult(success=False,
                               error_msg=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+# ---------- SCENARIO FORECASTS ----------
+#
+# Scenarios apply a one-time % level shift to selected drivers, then
+# project that shifted level forward across the forecast horizon.
+# We refit the model on actual history (no contamination) and call
+# get_forecast / forecast with TWO different X_future paths:
+#   - base: last observed row held flat (same as _hold_last_X)
+#   - shocked: last row * (1 + shock_pct/100) per driver, held flat
+#
+# Coefficients come from real data; only the future exog path differs.
+# This isolates "what does the model say if drivers move by X%" cleanly.
+
+
+@dataclass
+class ScenarioResult:
+    success: bool = False
+    model_type: str = ""
+    error_msg: str = ""
+    config_summary: str = ""
+    # Base case (last drivers held flat)
+    base_forecast: Optional[pd.Series] = None
+    base_lower_95: Optional[pd.Series] = None
+    base_upper_95: Optional[pd.Series] = None
+    # Shocked case
+    shocked_forecast: Optional[pd.Series] = None
+    shocked_lower_95: Optional[pd.Series] = None
+    shocked_upper_95: Optional[pd.Series] = None
+    # The applied shocks (driver -> % change), for display
+    shocks_applied: Optional[Dict[str, float]] = None
+    # Recent actuals for context (last 12 months)
+    recent_actuals: Optional[pd.Series] = None
+
+
+def _build_shocked_X(X: pd.DataFrame, horizon: int,
+                       shocks: Dict[str, float]) -> pd.DataFrame:
+    """Build a future X where each shocked driver is the last observed
+    value multiplied by (1 + shock/100), held flat across the horizon.
+    Drivers not in `shocks` are held at their last observed level.
+    """
+    last_row = X.iloc[-1].copy()
+    shocked_row = last_row.copy()
+    for col, pct in (shocks or {}).items():
+        if col in shocked_row.index:
+            shocked_row[col] = float(last_row[col]) * (1.0 + float(pct) / 100.0)
+    last_idx = X.index[-1]
+    future_idx = pd.date_range(
+        start=last_idx + pd.tseries.offsets.MonthBegin(1),
+        periods=horizon, freq="MS"
+    )
+    return pd.DataFrame([shocked_row.values] * horizon,
+                          index=future_idx, columns=X.columns)
+
+
+def run_arimax_scenario(target: pd.Series, X: pd.DataFrame,
+                          shocks: Dict[str, float],
+                          ar: int = 2, d: int = 1, ma: int = 1,
+                          horizon: int = 12,
+                          drivers: Optional[List[str]] = None) -> ScenarioResult:
+    """Refit ARIMAX on actual history, then produce BOTH a base forecast
+    (last drivers held flat) and a shocked forecast (drivers shifted by
+    shocks dict, then held flat at the shocked level).
+    """
+    cfg = (f"ARIMAX({ar},{d},{ma}), h={horizon}, "
+             f"shocks={ {k: f'{v:+.1f}%' for k, v in (shocks or {}).items()} }")
+
+    try:
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+    except ImportError:
+        return ScenarioResult(success=False, model_type="arimax",
+                                error_msg="statsmodels not installed",
+                                config_summary=cfg)
+
+    if drivers is not None:
+        usable = [d_ for d_ in drivers if d_ in X.columns]
+        if len(usable) == 0:
+            return ScenarioResult(success=False, model_type="arimax",
+                                    error_msg="No drivers selected",
+                                    config_summary=cfg)
+        X_use = X[usable]
+    else:
+        X_use = X
+
+    try:
+        common_idx = target.index.intersection(X_use.index)
+        y = target.loc[common_idx].astype(float)
+        Xa = X_use.loc[common_idx].astype(float)
+
+        if len(y) < (ar + d + ma + len(Xa.columns) + 5):
+            return ScenarioResult(success=False, model_type="arimax",
+                                    error_msg=f"Not enough data: need at least "
+                                              f"{ar + d + ma + len(Xa.columns) + 5} obs, have {len(y)}",
+                                    config_summary=cfg)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = SARIMAX(y, exog=Xa, order=(ar, d, ma),
+                              enforce_stationarity=False,
+                              enforce_invertibility=False)
+            fit = model.fit(disp=False, maxiter=200, method="lbfgs")
+
+        # Base
+        X_base = _hold_last_X(Xa, horizon)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fc_base = fit.get_forecast(steps=horizon, exog=X_base)
+        base_mean = fc_base.predicted_mean
+        base_ci = fc_base.conf_int(alpha=0.05)
+        base_mean.index = X_base.index
+        base_lower = base_ci.iloc[:, 0]; base_lower.index = X_base.index
+        base_upper = base_ci.iloc[:, 1]; base_upper.index = X_base.index
+
+        # Shocked
+        X_shock = _build_shocked_X(Xa, horizon, shocks or {})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fc_sh = fit.get_forecast(steps=horizon, exog=X_shock)
+        sh_mean = fc_sh.predicted_mean
+        sh_ci = fc_sh.conf_int(alpha=0.05)
+        sh_mean.index = X_shock.index
+        sh_lower = sh_ci.iloc[:, 0]; sh_lower.index = X_shock.index
+        sh_upper = sh_ci.iloc[:, 1]; sh_upper.index = X_shock.index
+
+        return ScenarioResult(
+            success=True, model_type="arimax", config_summary=cfg,
+            base_forecast=base_mean, base_lower_95=base_lower, base_upper_95=base_upper,
+            shocked_forecast=sh_mean, shocked_lower_95=sh_lower, shocked_upper_95=sh_upper,
+            shocks_applied=dict(shocks or {}),
+            recent_actuals=y.iloc[-12:],
+        )
+    except Exception as e:
+        return ScenarioResult(success=False, model_type="arimax",
+                                error_msg=f"{type(e).__name__}: {str(e)[:200]}",
+                                config_summary=cfg)
+
+
+def run_ardl_scenario(target: pd.Series, X: pd.DataFrame,
+                        shocks: Dict[str, float],
+                        ar: int = 2, dl: int = 2,
+                        horizon: int = 12,
+                        drivers: Optional[List[str]] = None) -> ScenarioResult:
+    """Refit ARDL on actual history, then produce BOTH a base forecast
+    and a shocked forecast. CIs computed manually from residual std
+    (same approach as fit_ardl)."""
+    cfg = (f"ARDL(ar={ar}, dl={dl}), h={horizon}, "
+             f"shocks={ {k: f'{v:+.1f}%' for k, v in (shocks or {}).items()} }")
+
+    try:
+        from statsmodels.tsa.api import ARDL
+    except ImportError:
+        return ScenarioResult(success=False, model_type="ardl",
+                                error_msg="statsmodels.tsa.api.ARDL unavailable",
+                                config_summary=cfg)
+
+    if drivers is not None:
+        usable = [d_ for d_ in drivers if d_ in X.columns]
+        if len(usable) == 0:
+            return ScenarioResult(success=False, model_type="ardl",
+                                    error_msg="No drivers selected",
+                                    config_summary=cfg)
+        X_use = X[usable]
+    else:
+        X_use = X
+
+    try:
+        common_idx = target.index.intersection(X_use.index)
+        y = target.loc[common_idx].astype(float)
+        Xa = X_use.loc[common_idx].astype(float)
+
+        min_obs = ar + dl * len(Xa.columns) + 8
+        if len(y) < min_obs:
+            return ScenarioResult(success=False, model_type="ardl",
+                                    error_msg=f"Not enough data: need at least {min_obs} obs, have {len(y)}",
+                                    config_summary=cfg)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = ARDL(y, lags=ar, exog=Xa, order=dl)
+            fit = model.fit()
+
+        in_sample = fit.fittedvalues
+        y_aligned = y.loc[in_sample.index] if hasattr(in_sample, "index") else y
+        resid_std = float(np.std(y_aligned - in_sample))
+        z95 = 1.96
+
+        # Base
+        X_base = _hold_last_X(Xa, horizon)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fc_base = fit.forecast(steps=horizon, exog=X_base)
+        base_vals = fc_base.values if hasattr(fc_base, "values") else np.asarray(fc_base)
+        base_mean = pd.Series(base_vals, index=X_base.index)
+        base_lower = base_mean - z95 * resid_std
+        base_upper = base_mean + z95 * resid_std
+
+        # Shocked
+        X_shock = _build_shocked_X(Xa, horizon, shocks or {})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fc_sh = fit.forecast(steps=horizon, exog=X_shock)
+        sh_vals = fc_sh.values if hasattr(fc_sh, "values") else np.asarray(fc_sh)
+        sh_mean = pd.Series(sh_vals, index=X_shock.index)
+        sh_lower = sh_mean - z95 * resid_std
+        sh_upper = sh_mean + z95 * resid_std
+
+        return ScenarioResult(
+            success=True, model_type="ardl", config_summary=cfg,
+            base_forecast=base_mean, base_lower_95=base_lower, base_upper_95=base_upper,
+            shocked_forecast=sh_mean, shocked_lower_95=sh_lower, shocked_upper_95=sh_upper,
+            shocks_applied=dict(shocks or {}),
+            recent_actuals=y.iloc[-12:],
+        )
+    except Exception as e:
+        return ScenarioResult(success=False, model_type="ardl",
+                                error_msg=f"{type(e).__name__}: {str(e)[:200]}",
+                                config_summary=cfg)
