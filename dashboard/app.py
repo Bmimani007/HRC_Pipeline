@@ -2815,8 +2815,10 @@ if tab_liquidity is not None:
                 fig.update_yaxes(title_text=f"HRC ({currency}/t)", secondary_y=False)
                 fig.update_yaxes(title_text="bps (spread / rate)", secondary_y=True,
                                  showgrid=False)
-                fig.update_layout(**PLOT_BASE, height=480, margin=DEFAULT_MARGIN,
-                                  plot_bgcolor='rgba(0,0,0,0)',  # transparent so regime bands show through
+                # Merge override into PLOT_BASE so plot_bgcolor isn't passed twice.
+                # Transparent plot bg lets the layer="below" regime rectangles show through.
+                fig.update_layout(**{**PLOT_BASE, "plot_bgcolor": "rgba(0,0,0,0)"},
+                                  height=480, margin=DEFAULT_MARGIN,
                                   legend=dict(orientation="h", yanchor="bottom",
                                               y=1.02, xanchor="left", x=0))
                 style_axes(fig)
