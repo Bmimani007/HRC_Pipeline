@@ -2777,7 +2777,7 @@ if tab_liquidity is not None:
                         fig.add_vrect(
                             x0=b['start'], x1=b['end'],
                             fillcolor=REGIME_COLOURS.get(b['regime'], 'rgba(0,0,0,0.05)'),
-                            line_width=0, layer="below",
+                            line_width=0, layer="above",
                         )
 
                 # HRC line
