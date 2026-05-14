@@ -2774,15 +2774,24 @@ if tab_liquidity is not None:
                 }
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-                # Shaded regime backgrounds
+                # Shaded regime backgrounds.
+                # IMPORTANT: We build a shapes list and pass it via update_layout
+                # rather than using fig.add_vrect(). add_vrect silently fails to
+                # register shapes on date-axis figures in some Plotly versions —
+                # the dict-based shapes API with explicit xref/yref is reliable.
+                regime_shapes = []
                 if not regime_series.empty:
                     blocks = regime_periods(regime_series)
                     for b in blocks:
-                        fig.add_vrect(
+                        regime_shapes.append(dict(
+                            type="rect",
+                            xref="x", yref="paper",
                             x0=b['start'], x1=b['end'],
+                            y0=0, y1=1,
                             fillcolor=REGIME_COLOURS.get(b['regime'], 'rgba(0,0,0,0.05)'),
-                            line_width=0, layer="below",
-                        )
+                            line=dict(width=0),
+                            layer="below",
+                        ))
 
                 # HRC line
                 fig.add_trace(
@@ -2819,6 +2828,7 @@ if tab_liquidity is not None:
                 # Transparent plot bg lets the layer="below" regime rectangles show through.
                 fig.update_layout(**{**PLOT_BASE, "plot_bgcolor": "rgba(0,0,0,0)"},
                                   height=480, margin=DEFAULT_MARGIN,
+                                  shapes=regime_shapes,
                                   legend=dict(orientation="h", yanchor="bottom",
                                               y=1.02, xanchor="left", x=0))
                 style_axes(fig)
