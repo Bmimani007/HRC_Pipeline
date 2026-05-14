@@ -2764,9 +2764,9 @@ if tab_liquidity is not None:
                 regime_series = rdf['Liquidity_Regime'].dropna() if 'Liquidity_Regime' in rdf.columns else pd.Series(dtype=object)
 
                 REGIME_COLOURS = {
-                    'Surplus': 'rgba(45, 106, 79, 0.12)',
-                    'Neutral': 'rgba(92, 107, 127, 0.08)',
-                    'Tight': 'rgba(164, 22, 26, 0.12)',
+                    'Surplus': 'rgba(45, 106, 79, 0.28)',
+                    'Neutral': 'rgba(150, 150, 150, 0.18)',
+                    'Tight':   'rgba(220, 50, 50, 0.22)',
                 }
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
 
