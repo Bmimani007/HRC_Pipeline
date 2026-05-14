@@ -457,7 +457,7 @@ PLOT_BASE = dict(
     template="plotly_white",
     colorway=CHART_PALETTE,
     paper_bgcolor="white",
-    plot_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="white",
     font=dict(family="Inter, system-ui, sans-serif",
               color=COLORS["ink"], size=12),
 )
@@ -2763,10 +2763,14 @@ if tab_liquidity is not None:
                 repo_series = rdf['Repo_Rate'].dropna() if 'Repo_Rate' in rdf.columns else pd.Series(dtype=float)
                 regime_series = rdf['Liquidity_Regime'].dropna() if 'Liquidity_Regime' in rdf.columns else pd.Series(dtype=object)
 
+                # NOTE: alphas bumped from 0.08-0.12 → 0.18-0.28 because the
+                # original values were invisible against the white plot background.
+                # Also: plot_bgcolor is overridden to transparent below so the
+                # layer="below" rectangles can actually show through.
                 REGIME_COLOURS = {
                     'Surplus': 'rgba(45, 106, 79, 0.28)',
                     'Neutral': 'rgba(150, 150, 150, 0.18)',
-                    'Tight':   'rgba(220, 50, 50, 0.22)',
+                    'Tight': 'rgba(220, 50, 50, 0.22)',
                 }
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -2777,7 +2781,7 @@ if tab_liquidity is not None:
                         fig.add_vrect(
                             x0=b['start'], x1=b['end'],
                             fillcolor=REGIME_COLOURS.get(b['regime'], 'rgba(0,0,0,0.05)'),
-                            line_width=0, layer="above",
+                            line_width=0, layer="below",
                         )
 
                 # HRC line
@@ -2812,6 +2816,7 @@ if tab_liquidity is not None:
                 fig.update_yaxes(title_text="bps (spread / rate)", secondary_y=True,
                                  showgrid=False)
                 fig.update_layout(**PLOT_BASE, height=480, margin=DEFAULT_MARGIN,
+                                  plot_bgcolor='rgba(0,0,0,0)',  # transparent so regime bands show through
                                   legend=dict(orientation="h", yanchor="bottom",
                                               y=1.02, xanchor="left", x=0))
                 style_axes(fig)
