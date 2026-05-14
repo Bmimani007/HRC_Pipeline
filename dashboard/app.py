@@ -457,7 +457,7 @@ PLOT_BASE = dict(
     template="plotly_white",
     colorway=CHART_PALETTE,
     paper_bgcolor="white",
-    plot_bgcolor="white",
+    plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Inter, system-ui, sans-serif",
               color=COLORS["ink"], size=12),
 )
