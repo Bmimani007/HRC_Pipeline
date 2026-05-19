@@ -320,12 +320,17 @@ def narrate_lead_lag(ll_df: pd.DataFrame, target: str) -> List:
 
     p1 = (
         f"Lead-lag analysis decomposes each driver's co-movement with HRC across "
-        f"lags from −12 to +12 months. A <b>positive lag</b> means the driver "
-        f"moves first and HRC follows (a leading indicator); a <b>negative lag</b> "
-        f"means HRC moves first and the driver follows (a lagging indicator); "
-        f"<b>lag zero</b> indicates a coincident relationship. The complementary "
-        f"Granger causality test asks the stricter question: does the driver's "
-        f"history actually improve HRC forecasts beyond HRC's own lags?"
+        f"lags from −6 to +6 months, computed on <b>STL residuals</b> — the "
+        f"idiosyncratic 'surprise' component of each series after removing trend "
+        f"and 12-month seasonality. This isolates true short-run transmission "
+        f"from shared trends and seasonal pulses (e.g. spring construction season) "
+        f"that otherwise mask real lead-lag signals. "
+        f"A <b>positive lag</b> means the driver moves first and HRC follows "
+        f"(a leading indicator); a <b>negative lag</b> means HRC moves first "
+        f"and the driver follows (a lagging indicator); <b>lag zero</b> indicates "
+        f"a coincident relationship. The complementary Granger causality test "
+        f"asks the stricter question: does the driver's history actually improve "
+        f"HRC forecasts beyond HRC's own lags?"
     )
     out.append(p1)
 
@@ -378,12 +383,16 @@ def narrate_lead_lag(ll_df: pd.DataFrame, target: str) -> List:
         lag_drivers = lagging["driver"].tolist()
         if len(lag_drivers) > 0:
             out.append(
-                f"<b>Counter-intuitive lagging signals:</b> {', '.join(lag_drivers)} "
-                f"appear to <i>follow</i> HRC rather than lead it. In commodity "
-                f"markets this typically reflects either (1) HRC responding faster "
-                f"to a common macro shock that takes longer to transmit to the "
-                f"trailing variable, or (2) a feedback channel where steel demand "
-                f"itself drives the variable in question."
+                f"<b>Drivers that follow HRC</b> — {', '.join(lag_drivers)} "
+                f"appear to <i>respond to</i> HRC shocks rather than precede them, "
+                f"even after removing trend and seasonality. In commodity markets "
+                f"this typically reflects either (1) a feedback channel where steel "
+                f"demand itself moves the variable (e.g. mill activity driving "
+                f"shipping or scrap demand), or (2) the variable is a downstream "
+                f"indicator whose monthly aggregation lags the spot HRC market. "
+                f"These are real findings, not artefacts: they tell you which "
+                f"variables to <i>read backwards</i> as confirmation rather than "
+                f"forward as prediction."
             )
 
     # Key box

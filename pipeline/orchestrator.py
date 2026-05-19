@@ -15,7 +15,7 @@ import pandas as pd
 
 from .data_loader import load_data, Dataset, RegionData
 from .diagnostics import adf_table, vif_table, correlation_matrix, summary_stats
-from .lead_lag import lead_lag_summary, rolling_correlations, cross_correlation
+from .lead_lag import lead_lag_summary, rolling_correlations, cross_correlation, lag_matrix
 from .spread import analyse_region as analyse_spread, cross_region_comparison
 from .regimes import classify_regimes
 from .attribution import rolling_attribution
@@ -94,6 +94,9 @@ def _analyse_region(region_data: RegionData, config: dict) -> Dict[str, Any]:
                                     lead_lag_summary, region_data.y, region_data.X,
                                     config["analysis"]["lead_lag"]["max_lag_months"],
                                     config["analysis"]["lead_lag"]["granger_significance"])
+    out["lag_matrix"] = _step("lag matrix (heatmap source)",
+                                    lag_matrix, region_data.y, region_data.X,
+                                    config["analysis"]["lead_lag"]["max_lag_months"])
     out["rolling_corr"] = _step("rolling correlations",
                                     rolling_correlations, region_data.y, region_data.X,
                                     config["analysis"]["lead_lag"]["rolling_window"])

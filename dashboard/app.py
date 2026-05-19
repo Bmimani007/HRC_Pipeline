@@ -139,6 +139,12 @@ def cached_lead_lag(_region_data, cache_key: str, max_lag: int, file_mtime: floa
     return lead_lag_summary(_region_data.y, _region_data.X, max_lag=max_lag)
 
 
+@st.cache_data(show_spinner="Computing lag matrix...")
+def cached_lag_matrix(_region_data, cache_key: str, max_lag: int, file_mtime: float):
+    from pipeline.lead_lag import lag_matrix
+    return lag_matrix(_region_data.y, _region_data.X, max_lag=max_lag)
+
+
 @st.cache_data(show_spinner="Classifying regimes...")
 def cached_regimes(_region_data, cache_key: str, n_regimes: int, file_mtime: float):
     return classify_regimes(_region_data.y, _region_data.X, n_regimes=n_regimes,
@@ -1222,7 +1228,11 @@ with tab_lead_lag:
         if len(selected_drivers) == 0:
             st.warning("Select at least one driver in the sidebar.")
         else:
-            max_lag = st.slider("Max lag (months)", 3, 24, 12)
+            # Fixed max-lag of 6 (presentation-grade default). The full table
+            # from -6 to +6 lets the user see lead AND lag at a glance — no
+            # slider needed, no algorithmic 'best lag' picking required.
+            max_lag = 6
+            mat = cached_lag_matrix(filt_region, filter_key, max_lag, file_mtime)
             ll = cached_lead_lag(filt_region, filter_key, max_lag, file_mtime)
 
             # Live interpretation
@@ -1231,29 +1241,91 @@ with tab_lead_lag:
                 render_interpretation(
                     narrator.narrate_lead_lag(ll, target_name),
                     label="Lead/Lag interpretation",
-                    settings_summary=f"Region: {region_pick.title()}, Max lag: ±{max_lag}m, "
-                                      f"Drivers selected: {len(selected_drivers)}",
+                    settings_summary=f"Region: {region_pick.title()}, Lags: ±{max_lag}m, "
+                                      f"Method: STL-residual CCF, Drivers: {len(selected_drivers)}",
                 )
             except Exception as _e:
                 pass
 
-            st.subheader("Best Lead/Lag per Driver")
-            fig = go.Figure()
-            colors_list = [COLORS["accent"] if g else COLORS["muted"]
-                            for g in ll["granger_x_causes_y"]]
-            fig.add_trace(go.Bar(y=ll["driver"], x=ll["best_lag_months"],
-                                  orientation="h", marker_color=colors_list,
-                                  text=[f"r={c:.2f} (lag {l:+d})" for c, l in
-                                        zip(ll["ccf_at_best_lag"], ll["best_lag_months"])],
-                                  textposition="outside"))
-            fig.add_vline(x=0, line_color=COLORS["muted"], line_dash="dot")
-            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=max(380, len(ll) * 30),
-                               xaxis_title="Best lag (months)",
-                               yaxis=dict(autorange="reversed"))
-            style_axes(fig)
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("Filled bars = Granger-significant. Positive lag = driver leads price.")
-            st.dataframe(ll, use_container_width=True, hide_index=True)
+            st.markdown(
+                "**How to read this table.** Each cell shows the correlation between "
+                "the *idiosyncratic shocks* in HRC and the driver, after stripping out "
+                "trend and 12-month seasonality (STL decomposition). "
+                "**Positive lag → driver leads HRC** (e.g. lag +1 = driver moves one "
+                "month before HRC). **Negative lag → HRC leads driver.** "
+                "Stronger green = stronger positive correlation; stronger red = stronger negative."
+            )
+
+            st.subheader(f"Cross-correlation heatmap — lags −{max_lag} to +{max_lag} months")
+
+            # Order drivers by absolute strength at any positive lag (presentation-friendly)
+            if not mat.empty:
+                pos_cols = [c for c in mat.columns if c >= 0]
+                order_score = mat[pos_cols].abs().max(axis=1).sort_values(ascending=False)
+                mat_sorted = mat.loc[order_score.index]
+
+                # Heatmap
+                z = mat_sorted.values
+                lag_cols = list(mat_sorted.columns)
+                drivers_list = list(mat_sorted.index)
+
+                # Build cell text — show correlation, bold-style the best lag per row
+                text_cells = []
+                for i, row in enumerate(z):
+                    # find best (max abs) cell in this row
+                    abs_row = np.abs(np.where(np.isnan(row), 0, row))
+                    best_j = int(np.nanargmax(abs_row)) if abs_row.size else -1
+                    row_text = []
+                    for j, v in enumerate(row):
+                        if np.isnan(v):
+                            row_text.append("")
+                        elif j == best_j:
+                            # Mark the best lag for this driver
+                            row_text.append(f"<b>{v:+.2f}</b>")
+                        else:
+                            row_text.append(f"{v:+.2f}")
+                    text_cells.append(row_text)
+
+                heatmap_fig = go.Figure(data=go.Heatmap(
+                    z=z,
+                    x=[f"{k:+d}" for k in lag_cols],
+                    y=drivers_list,
+                    text=text_cells,
+                    texttemplate="%{text}",
+                    textfont=dict(size=11),
+                    colorscale="RdYlGn",
+                    zmid=0,
+                    zmin=-1, zmax=1,
+                    colorbar=dict(title="r", thickness=12),
+                    hovertemplate="<b>%{y}</b><br>Lag: %{x} months<br>r = %{z:+.3f}<extra></extra>",
+                ))
+                heatmap_fig.update_layout(
+                    **PLOT_BASE,
+                    margin=dict(l=10, r=10, t=30, b=40),
+                    height=max(380, len(drivers_list) * 42 + 80),
+                    xaxis=dict(title="Lag (months) — positive = driver leads HRC", side="bottom"),
+                    yaxis=dict(autorange="reversed"),
+                )
+                style_axes(heatmap_fig)
+                st.plotly_chart(heatmap_fig, use_container_width=True)
+                st.caption(
+                    "Bold cells mark each driver's strongest correlation across all lags. "
+                    "Heat clustered on the right (positive lags) = driver leads HRC. "
+                    "Heat on the left = HRC leads driver. Heat at lag 0 = contemporaneous."
+                )
+
+            # Granger significance — separate, since it's a single test per driver
+            st.subheader("Granger causality (residual-based)")
+            granger_view = ll[["driver", "best_lag_months", "ccf_at_best_lag",
+                                "granger_x_causes_y", "granger_min_pvalue", "granger_best_lag"]].copy()
+            granger_view.columns = ["Driver", "Best lag (m)", "r at best lag",
+                                     "Granger-significant?", "Min p-value", "Granger best lag"]
+            st.dataframe(granger_view, use_container_width=True, hide_index=True)
+            st.caption(
+                "Granger asks: does the driver's history improve HRC forecasts beyond HRC's "
+                "own lags? A p-value below 0.05 (✓) means yes. Computed on the same STL "
+                "residuals as the heatmap, so the test is statistically valid (residuals are stationary)."
+            )
 
 
 # ===== REGIMES =====

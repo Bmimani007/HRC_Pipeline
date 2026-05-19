@@ -131,7 +131,7 @@ analysis:
     significance: 0.05               # ADF p-value threshold
 
   lead_lag:
-    max_lag_months: 12               # CCF + Granger lookback window
+    max_lag_months: 6                # CCF + Granger lookback window (±6m on STL residuals)
     granger_significance: 0.05
     rolling_window: 12               # months for rolling correlations
 

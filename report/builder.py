@@ -219,6 +219,8 @@ def chart_correlation_heatmap(corr_df):
 
 
 def chart_lead_lag(lead_lag_df, target_name):
+    """Compact backward-compat bar chart of best-lag per driver. Used only as a
+    fallback. The new primary visual is chart_lead_lag_heatmap()."""
     if lead_lag_df is None or len(lead_lag_df) == 0:
         return None
     df = lead_lag_df.copy().head(15)
@@ -235,12 +237,76 @@ def chart_lead_lag(lead_lag_df, target_name):
     ))
     fig.add_vline(x=0, line_color=COLORS["muted"], line_dash="dot")
     fig.update_layout(
-        title=dict(text=f"Lead/Lag vs {target_name}  ·  positive = driver leads price  ·  "
-                         "filled bars = Granger-significant",
+        title=dict(text=f"Best lag per driver vs {target_name}",
                     font=dict(size=14)),
         xaxis_title="Best lag (months)",
         yaxis=dict(autorange="reversed"),
         height=max(380, len(df) * 26),
+    )
+    return fig
+
+
+def chart_lead_lag_heatmap(lag_mat, target_name):
+    """
+    Heatmap of CCF (on STL residuals) across lags. Each row is a driver,
+    columns are lags from -max_lag to +max_lag.
+
+    Positive lag = driver leads HRC; negative lag = HRC leads driver.
+    Strong green = positive correlation; strong red = negative.
+    """
+    if lag_mat is None or (hasattr(lag_mat, "empty") and lag_mat.empty):
+        return None
+
+    # Order rows by absolute strength at any positive lag — presentation friendly
+    pos_cols = [c for c in lag_mat.columns if c >= 0]
+    if pos_cols:
+        order_score = lag_mat[pos_cols].abs().max(axis=1).sort_values(ascending=False)
+        mat = lag_mat.loc[order_score.index]
+    else:
+        mat = lag_mat
+
+    z = mat.values
+    lag_cols = list(mat.columns)
+    drivers_list = list(mat.index)
+
+    # Bold-style each row's best (max-abs) cell
+    import numpy as _np
+    text_cells = []
+    for row in z:
+        abs_row = _np.abs(_np.where(_np.isnan(row), 0, row))
+        best_j = int(_np.nanargmax(abs_row)) if abs_row.size else -1
+        cells = []
+        for j, v in enumerate(row):
+            if _np.isnan(v):
+                cells.append("")
+            elif j == best_j:
+                cells.append(f"<b>{v:+.2f}</b>")
+            else:
+                cells.append(f"{v:+.2f}")
+        text_cells.append(cells)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z,
+        x=[f"{k:+d}" for k in lag_cols],
+        y=drivers_list,
+        text=text_cells,
+        texttemplate="%{text}",
+        textfont=dict(size=10),
+        colorscale="RdYlGn",
+        zmid=0, zmin=-1, zmax=1,
+        colorbar=dict(title="r", thickness=10),
+        hovertemplate="<b>%{y}</b><br>Lag: %{x} months<br>r = %{z:+.3f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(
+            text=f"Lead/Lag heatmap vs {target_name}  ·  STL-residual CCF  ·  "
+                  "positive lag = driver leads price",
+            font=dict(size=13),
+        ),
+        xaxis_title="Lag (months)",
+        yaxis=dict(autorange="reversed"),
+        height=max(380, len(drivers_list) * 38 + 100),
+        margin=dict(l=10, r=10, t=60, b=40),
     )
     return fig
 
@@ -1459,15 +1525,22 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
         # ----- 4. Lead-Lag -----
         if not is_overview_only:
             ll = region_results.get("lead_lag")
+            lag_mat = region_results.get("lag_matrix")
             ll_section = f"""
 <section>
   <h2>Lead/Lag &amp; Causal Analysis — {region_name.title()}</h2>
-  <div class="subtitle">Cross-correlation function (CCF) and Granger causality across lags.</div>
+  <div class="subtitle">Cross-correlation function (CCF) on STL residuals and Granger causality across lags.</div>
 
   {_render_prose(narrator.narrate_lead_lag(ll, meta['target']))}
 
-  <div class="chart-container">{_embed_chart(chart_lead_lag(ll, meta['target']))
-                                  if ll is not None and not isinstance(ll, dict) else '<div class="empty">N/A</div>'}</div>
+  <div class="chart-container">{_embed_chart(chart_lead_lag_heatmap(lag_mat, meta['target']))
+                                  if lag_mat is not None and not (hasattr(lag_mat, 'empty') and lag_mat.empty)
+                                  else '<div class="empty">N/A</div>'}</div>
+  <p class="muted" style="font-size:0.92em;margin-top:0.5em">
+    Cells show Pearson correlation between the idiosyncratic (post-STL) shocks
+    in HRC and the driver. <b>Positive lag</b> = driver leads HRC; <b>negative lag</b>
+    = HRC leads driver. Bold values mark each driver's strongest correlation.
+  </p>
   {_df_to_html(ll)}
 </section>"""
             html_parts.append(ll_section)
