@@ -884,6 +884,156 @@ def narrate_attribution(attr_result, currency: str) -> List:
     return out
 
 
+# ---------- EVENT DEEP-DIVE narration (Phase 4) ----------
+
+def narrate_event_deep_dive(result, currency: str = "USD") -> List:
+    """
+    Trader-grade prose for one Event Deep-Dive.
+
+    `result` is an EventDeepDiveResult. The narration walks the four panels:
+    what moved, why (decomposition), how often (recurrence base rate) and
+    whether today rhymes with the event.
+    """
+    if result is None:
+        return ["<i>Event deep-dive unavailable.</i>"]
+
+    out = []
+    ev = result.event
+    move = result.headline_move_pct
+
+    # --- Panel 1: what moved ---
+    if move == move:   # not NaN
+        direction = "fell" if move < 0 else "rose"
+        out.append(
+            f"<b>{ev.label}</b> ({ev.date.strftime('%b %Y')}). Across the "
+            f"±{result.primary_window_m}-month window around this event, HRC "
+            f"{direction} <b>{abs(move):.1f}%</b> from its pre-event average to "
+            f"its post-event average. The table above breaks the same window "
+            f"down variable by variable."
+        )
+    else:
+        out.append(
+            f"<b>{ev.label}</b> ({ev.date.strftime('%b %Y')}). The window table "
+            f"above shows how HRC and its drivers behaved either side of this "
+            f"event."
+        )
+
+    # --- Panel 2: decomposition ---
+    if result.decomposition_available and result.contributions:
+        ranked = [c for c in result.contributions
+                  if c.contribution_pct == c.contribution_pct]
+        if ranked:
+            top = ranked[0]
+            top3 = ranked[:3]
+            top3_txt = ", ".join(
+                f"<b>{c.driver}</b> ({c.contribution_pct:.0f}%)" for c in top3)
+            out.append(
+                f"<b>What was doing the work.</b> Decomposing the move with the "
+                f"rolling-attribution betas in force during the window, the "
+                f"largest contributor was <b>{top.driver}</b> "
+                f"({top.contribution_pct:.0f}% of the explained move). The top "
+                f"three — {top3_txt} — together account for "
+                f"<b>{sum(c.contribution_pct for c in top3):.0f}%</b>. "
+                f"Contributions are scale-aware (|β·σ|), so a driver quoted in "
+                f"small units does not crowd the panel through unit scale alone."
+            )
+        if result.decomposition_note:
+            out.append(f"<i>{result.decomposition_note}</i>")
+    else:
+        out.append(
+            f"<b>Decomposition:</b> {result.decomposition_note}"
+        )
+
+    # --- Panel 3: recurrence base rate ---
+    rec = result.recurrence
+    if rec is not None and rec.n_events > 0:
+        h_mid = rec.horizons[len(rec.horizons) // 2]
+        avg_mid = rec.avg_move_pct.get(h_mid)
+        hit_mid = rec.hit_rate.get(h_mid)
+        if avg_mid == avg_mid and hit_mid == hit_mid:
+            expected = "lower" if rec.kind == "peak" else "higher"
+            out.append(
+                f"<b>How turns like this usually resolve.</b> Across the "
+                f"{rec.n_events} detected {rec.kind}s in this region's history, "
+                f"HRC moved on average <b>{avg_mid:+.1f}%</b> in the "
+                f"{h_mid} months after the turn, and finished {expected} "
+                f"<b>{hit_mid*100:.0f}%</b> of the time. This is the empirical "
+                f"base rate — the event above should be read against it."
+            )
+        if not rec.sufficient and rec.note:
+            out.append(f"<i>{rec.note}</i>")
+
+    # --- Cross-region: where did it change ---
+    def _rg(name: str) -> str:
+        return name.upper() if name.lower() == "us" else name.title()
+    cross = [c for c in result.cross_region if c.available]
+    if len(cross) >= 2:
+        moved = sorted(cross, key=lambda c: abs(c.pct_change)
+                       if c.pct_change == c.pct_change else 0, reverse=True)
+        biggest = moved[0]
+        # find any region that moved the opposite way
+        signs = {c.region: (1 if c.pct_change > 0 else -1)
+                 for c in cross if c.pct_change == c.pct_change}
+        diverged = len(set(signs.values())) > 1
+        region_bits = ", ".join(
+            f"<b>{_rg(c.region)}</b> {c.pct_change:+.1f}%" for c in cross
+            if c.pct_change == c.pct_change)
+        if diverged:
+            out.append(
+                f"<b>Where it changed.</b> The same event landed differently by "
+                f"region: {region_bits}. The regions did <i>not</i> move in the "
+                f"same direction — a sign the shock was regional in origin or "
+                f"transmission, not a single global move. {_rg(biggest.region)} "
+                f"saw the largest swing."
+            )
+        else:
+            out.append(
+                f"<b>Where it changed.</b> By region: {region_bits}. All regions "
+                f"moved the same way, but by different magnitudes — "
+                f"{_rg(biggest.region)} most, consistent with a broadly global "
+                f"shock with uneven local intensity."
+            )
+
+    # --- Curated context: the narrative 'why' ---
+    cur = result.curated
+    if cur.matched and cur.why:
+        conf_txt = (f" (curator confidence: {cur.confidence})"
+                    if cur.confidence else "")
+        out.append(
+            f"<b>The story behind it{conf_txt}.</b> {cur.why}"
+        )
+
+    # --- Driver-level causal tracing: why each top driver itself moved ---
+    if cur.driver_stories:
+        for ds in cur.driver_stories:
+            if not ds.why:
+                continue
+            country_bit = (f" <i>Trigger located in: {ds.country}</i>"
+                           if ds.country else "")
+            out.append(
+                f"<b>Tracing the driver — {ds.driver}.</b> {ds.why}{country_bit}"
+            )
+
+    # --- Panel 4: live rhyme flag ---
+    score_pct = result.rhyme_score * 100
+    if result.rhyme_score >= 0.66:
+        verdict = ("strongly rhymes with current conditions — this is an event "
+                   "worth having front of mind")
+    elif result.rhyme_score >= 0.34:
+        verdict = "partially rhymes with current conditions"
+    else:
+        verdict = "does not closely rhyme with current conditions"
+    out.append(
+        f"<b>Does today rhyme?</b> On a three-part check (regime, drawdown band, "
+        f"momentum sign), the present {verdict} — a rhyme score of "
+        f"<b>{score_pct:.0f}%</b>. The event sat in the "
+        f"<b>{result.event_regime_label or 'n/a'}</b> regime; the market is "
+        f"currently in <b>{result.current_regime_label}</b>."
+    )
+
+    return out
+
+
 # ---------- MACRO CALENDAR narration ----------
 
 def _channel_label(channel_id: str) -> str:
@@ -1055,55 +1205,6 @@ def narrate_macro_calendar(calendar_result) -> List:
     out = list(narrate_macro_calendar_intro(calendar_result))
     for ev in calendar_result.events:
         out.append(narrate_event(ev))
-    return out
-
-
-# ---------- REGIMES (K-means) narration ----------
-
-def narrate_regimes(regime_result, currency: str = "USD") -> List:
-    """Prose for the regime classification section (K-means based)."""
-    if regime_result is None:
-        return ["<i>Regime classification unavailable.</i>"]
-
-    out = []
-    n_reg = regime_result.n_regimes
-    cur_r = regime_result.current_regime
-
-    # Para 1: methodology
-    p1 = (
-        f"This section identifies <b>{n_reg} market regimes</b> using K-means "
-        f"clustering on the joint distribution of HRC and its drivers. Unlike the "
-        f"GMM approach in the Cyclicity tab, K-means assigns each month to exactly "
-        f"one regime based on its position in feature space. The market is currently "
-        f"in <b>regime {cur_r}</b>."
-    )
-    out.append(p1)
-
-    # Per-regime stats summary
-    if hasattr(regime_result, "regime_stats") and regime_result.regime_stats is not None:
-        try:
-            stats_df = regime_result.regime_stats
-            current_row = stats_df[stats_df.iloc[:, 0] == cur_r] if len(stats_df) > 0 else None
-            cur_n = int(current_row.iloc[0].get("n_months", 0)) if current_row is not None and len(current_row) > 0 else 0
-            total_months = int(stats_df["n_months"].sum()) if "n_months" in stats_df.columns else 0
-            if cur_n > 0 and total_months > 0:
-                pct_in_cur = cur_n / total_months * 100
-                p2 = (
-                    f"Of {total_months} historical months, <b>{cur_n}</b> "
-                    f"({pct_in_cur:.0f}%) have fallen in the current regime — "
-                    f"this is a {'common' if pct_in_cur > 25 else 'rarer'} state for the market."
-                )
-                out.append(p2)
-        except Exception:
-            pass
-
-    out.append(_key_box(
-        "Key Interpretation",
-        f"Market currently classified in <b>regime {cur_r}</b> of {n_reg}. "
-        f"K-means provides a hard classification useful for filtering historical "
-        f"comparable periods. For richer dynamics (transition probabilities, "
-        f"cycle frequencies), see the Cyclicity tab."
-    ))
     return out
 
 

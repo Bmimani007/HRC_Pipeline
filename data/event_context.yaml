@@ -1,0 +1,447 @@
+# =============================================================================
+# HRC Steel Pipeline — Curated Event & Driver Context
+# =============================================================================
+# This file supplies the QUALITATIVE half of the Event Deep-Dive tab: the
+# narrative "why" that the numeric data alone cannot explain. The pipeline can
+# show that iron ore fell 24% around an event; only curated, sourced context
+# can say that fall was driven by China's Tangshan output cuts and the
+# property-sector contraction.
+#
+# TWO SECTIONS
+#   events:          one block per turning point — the event-level story.
+#   driver_context:  one block per (driver, period) — the DRIVER-level story.
+#                    This is the "country analysis" layer: when HRC moved
+#                    because iron ore moved, this explains why iron ORE moved
+#                    and in which country the trigger sat.
+#
+# HOW THIS IS USED
+#   The Event Deep-Dive tab matches a chosen event to an `events` entry BY
+#   DATE (within ~2 months). For each top driver of that event it also looks
+#   for a `driver_context` entry whose `driver` matches and whose date window
+#   brackets the event. Matches render as context blocks; misses degrade
+#   cleanly to "no curated context — data panels only".
+#
+# HOW TO MAINTAIN (same muscle memory as macro_calendar.yaml)
+#   Add a new dated block, fill the fields, keep claims factual and SOURCED
+#   (this is shared with leadership), save. The dashboard picks it up on next
+#   load — no code change. The repo's MASTER_PROMPT-style workflow can
+#   generate these blocks from a Claude.ai chat.
+#
+# A NOTE ON "LIVE" CONTEXT
+#   The deployed Streamlit app cannot itself call a web-search API (no API
+#   access on the Pro plan, no key on free-tier Cloud). The content here was
+#   research-compiled from public reporting at build time and is SNAPSHOTTED:
+#   each block carries `as_of` so a regenerated report is reproducible rather
+#   than a moving target. Refresh by re-running the research prompt monthly.
+#
+# FIELD GUIDE — events
+#   match_date        the event date this context describes (anchors the match)
+#   title             short human title
+#   as_of             when this context was researched/last verified
+#   what_changed      plain bullets: which variables moved and roughly how much
+#   why               the causal narrative — the actual reason behind the move
+#   country_breakdown per-region notes: how China / India / US were affected
+#   watch_next        what to monitor for a repeat setup
+#   sources           list of {title, url} the narrative draws on
+#   confidence        high / medium / low — how settled the causal story is
+#
+# FIELD GUIDE — driver_context
+#   driver            driver column name (matched loosely, case-insensitive)
+#   from / to         date window this driver story covers
+#   headline          one-line summary of what the driver did
+#   why               why the DRIVER itself moved
+#   country           which country/region the trigger originated in
+#   sources           list of {title, url}
+# =============================================================================
+
+events:
+
+  - match_date: "2021-11-01"
+    title: "Steel Supercycle Peak (Nov 2021)"
+    as_of: "2026-05"
+    confidence: high
+    what_changed:
+      - "China HRC FOB rolled over from its cycle high; Chinese rebar/wire-rod futures fell roughly 24-31% from the mid-September peak into Q4."
+      - "China crude-steel output fell more than 20% year-on-year from September 2021 as Beijing enforced output caps."
+      - "Iron ore had already crashed from its May 2021 record (~$230/t spot) toward ~$90-120/t by Q4 on collapsing mill demand."
+      - "Coking coal stayed extremely elevated on tight seaborne supply, squeezing mill margins from both sides."
+    why: >
+      The 2021 peak was the exhaustion of a post-COVID restocking surge running
+      straight into a deliberate Chinese policy brake. Beijing ordered crude-steel
+      output held at or below 2020 levels (a decarbonisation goal — steel is
+      roughly 15% of China's carbon emissions), which curbed production from
+      July 2021 onward. At the same time China's property sector — about 28% of
+      GDP and the single largest steel end-market — was contracting: new
+      construction starts by floor area had been falling year-on-year since
+      July 2021, the longest run of declines since 2015, and the Evergrande
+      developer-default crisis crystallised through late 2021. Demand
+      expectations rolled over while coking-coal input costs stayed high, so
+      mill margins compressed and the price cycle turned down.
+    country_breakdown:
+      china: >
+        Epicentre. Output caps plus a property-demand contraction hit HRC and
+        iron ore together. Chinese steel equities fell ~27% and construction-
+        steel futures 24-31% from the September peak. China led the downturn.
+      india: >
+        More resilient and later. Domestic demand and the festival/construction
+        cycle cushioned the move; INR HRC corrected less and lagged China FOB.
+      us: >
+        A different clock. US Midwest HRC stayed historically elevated into
+        2022 on local supply tightness and import barriers — the US peak lagged
+        China's by months.
+    watch_next:
+      - "China crude-steel output policy — production-cap announcements ahead of winter and the March legislative sessions."
+      - "Property indicators: new-construction starts by floor area, developer financing conditions."
+      - "The HCC-vs-HRC margin spread — a margin squeeze with high coal is the warning sign."
+    sources:
+      - title: "China's property distress sours steel sector (CNBC, Dec 2021)"
+        url: "https://www.cnbc.com/2021/12/19/chinas-property-distress-sours-steel-sector-in-warning-sign-for-economy.html"
+      - title: "Global Steel November Production Drops as Green Push Hits China (Nasdaq)"
+        url: "https://www.nasdaq.com/articles/global-steel-november-production-drops-as-green-push-hits-china"
+      - title: "IEEFA: China's peak steel emissions shift"
+        url: "https://ieefa.org/resources/ieefa-chinas-peak-steel-emissions-shift-unlikely-delay-carbon-reductions"
+
+  - match_date: "2022-02-01"
+    title: "Ukraine War & Multi-Year Correction (Feb 2022)"
+    as_of: "2026-05"
+    confidence: high
+    what_changed:
+      - "Russia invaded Ukraine on 24 February 2022, triggering an immediate spike in energy and bulk-commodity prices."
+      - "Australian premium hard coking coal surged toward and past US$500/t — up roughly 140% year-on-year by end-March 2022."
+      - "Thermal and metallurgical coal hit record highs; freight and energy costs jumped on the war premium."
+      - "HRC saw a brief sympathy spike, then resumed a broad multi-quarter decline as demand worry took over."
+    why: >
+      The invasion was a supply shock layered on an already-cooling demand
+      backdrop. Russia is a major energy, coal and pig-iron supplier, and
+      Ukraine itself was a meaningful iron-ore and steel exporter (its crude-
+      steel output fell roughly 68% in 2022 as plants such as Azovstal in
+      Mariupol were destroyed). The war removed supply and spiked input costs,
+      briefly lifting steel prices. But the dominant medium-term force was
+      demand: surging energy costs fed global inflation, central banks began
+      aggressive rate hikes, and the Chinese property slowdown continued. After
+      the initial shock spike, HRC followed input costs and demand expectations
+      back down, extending the correction that had begun after the Nov 2021 peak.
+    country_breakdown:
+      china: >
+        Demand-led weakness continued; the war's input-cost spike was a short-
+        lived overlay on an already-downward trajectory.
+      india: >
+        Hit from both sides. India imports ~85% of its coking coal, so the
+        coal spike fed directly into mill costs — domestic producers raised
+        HRC and TMT prices by up to Rs 5,000/t in early March 2022. Then India's
+        May 2022 steel export duty redirected supply to the domestic market and
+        weighed on Indian HRC into mid-2022.
+      us: >
+        Energy-cost and inflation channel dominant. US HRC rolled over through
+        2022 as Fed tightening hit construction and manufacturing demand.
+    watch_next:
+      - "Energy prices as a steel input-cost channel — oil, coking coal, freight."
+      - "Central-bank rate path — the demand-destruction channel."
+      - "Policy responses such as export duties that redirect regional supply."
+    sources:
+      - title: "Coal prices spike as Russia-Ukraine crisis escalates (Wood Mackenzie)"
+        url: "https://www.woodmac.com/press-releases/coal-prices-spike-as-russia-ukraine-crisis-escalates/"
+      - title: "Steel prices jump up to Rs 5,000/t amid Russia-Ukraine conflict (The Tribune)"
+        url: "https://www.tribuneindia.com/news/business/steel-prices-jump-up-to-rs-5-000-per-tonne-as-supply-chain-hit-amid-russia-ukraine-conflict-375067"
+      - title: "Metals and the invasion: Ukrainian metal-makers' woes (S&P Global)"
+        url: "https://www.spglobal.com/market-intelligence/en/news-insights/articles/2023/2/metals-and-the-invasion-ukrainian-metal-makers-woes-grow-as-attacks-intensify-74346692"
+
+  - match_date: "2024-02-01"
+    title: "China Stimulus Recovery Attempt (Feb 2024)"
+    as_of: "2026-05"
+    confidence: medium
+    what_changed:
+      - "China rolled out a sequence of property-support and broader stimulus measures from late 2023 into 2024, including a plan for at least 1 trillion yuan of low-cost property financing."
+      - "HRC and iron ore saw an attempted recovery bounce that proved shallow and short-lived."
+      - "Property fundamentals stayed weak — Jan-Apr 2024 property investment fell ~9.8% YoY and new-home prices dropped at the fastest pace in nine years."
+    why: >
+      Through late 2023 and 2024 Beijing rolled out incremental support — rate
+      and reserve-ratio cuts, property-financing measures, local-government debt
+      support. The steel complex tried to price in a demand recovery. But the
+      property downturn was structural, not cyclical: new-construction starts
+      remained deeply negative (down 20%+), and analysts noted the measures
+      focused on destocking rather than new demand. Analysts at CICC and
+      Sinosteel Futures explicitly flagged that the stimulus would not push up
+      steel consumption directly. The result was a recovery *attempt* rather
+      than a recovery — a bounce that faded once the demand follow-through
+      failed to appear. It is the cleanest recent example of stimulus
+      *headlines* moving price more than stimulus *delivery* did.
+    country_breakdown:
+      china: >
+        Centre of the stimulus story. The gap between announced support and
+        actual property demand is the key tension — headlines lifted valuations,
+        fundamentals did not confirm.
+      india: >
+        Comparatively steady on its own domestic demand cycle; less driven by
+        the China stimulus narrative than by local construction and rates.
+      us: >
+        Largely decoupled — US HRC traded on domestic supply and demand rather
+        than the China stimulus headlines.
+    watch_next:
+      - "Whether stimulus converts to actual property new-starts, not just announcements."
+      - "Iron ore's response — it reacts fast to China demand-expectation shifts."
+      - "PMI staying above vs below 50 as the demand-confirmation signal."
+    sources:
+      - title: "Iron ore falls as weak fundamentals outweigh property stimulus (Mining.com)"
+        url: "https://www.mining.com/web/iron-ore-price-falls-to-one-week-low-as-weak-fundamentals-outweigh-latest-property-stimulus/"
+      - title: "China stimulus optimism supports iron ore prices (ING Think)"
+        url: "https://think.ing.com/articles/china-stimulus-optimism-supports-iron-ore-prices/"
+      - title: "Iron ore heads for weekly gain on China's property stimulus (Reuters)"
+        url: "https://tw.tradingview.com/news/reuters.com,2024:newsml_L4N3HK0FU:0-iron-ore-heads-for-weekly-gain-on-china-s-property-stimulus-efforts"
+
+
+# =============================================================================
+# DRIVER-LEVEL CONTEXT — the "country analysis" layer
+# =============================================================================
+# When the decomposition panel says a driver did X% of an event's move, these
+# blocks answer the next question: why did that DRIVER itself move, and where
+# was the trigger? Matched to an event by (driver name, date window).
+# =============================================================================
+
+driver_context:
+
+  - driver: "Iron Ore 62%Fe (China CFR)"
+    from: "2021-05-01"
+    to: "2021-12-31"
+    headline: >
+      Iron ore crashed from a record ~$230/t (May 2021) toward $90-120/t by
+      Q4 2021 — one of its sharpest declines on record.
+    why: >
+      The fall was almost entirely a China demand shock, not a supply event.
+      Beijing's order to hold 2021 crude-steel output at/below 2020 levels
+      forced mills to cut production from July; blast-furnace utilisation at
+      247 mills fell well below the prior year. Anti-pollution restrictions in
+      Tangshan — the city that alone accounts for about a quarter of Chinese
+      steel output — repeatedly curbed mill operations. With mills cutting
+      runs, demand for the raw material collapsed even as Australian and
+      Brazilian shipments continued. Chinese regulators (NDRC) also cracked
+      down on iron-ore speculation, adding downward pressure.
+    country: >
+      China — the trigger was entirely Chinese policy (output caps, Tangshan
+      pollution curbs, NDRC anti-speculation action). Australia and Brazil, the
+      supply side, played no triggering role in the fall.
+    sources:
+      - title: "Dalian iron ore worst week in 17 months on China steel curbs (Nasdaq/Reuters)"
+        url: "https://www.nasdaq.com/articles/dalian-iron-ore-sees-worst-week-in-17-months-on-china-steel-curbs-2021-07-23"
+      - title: "Dalian iron ore tumbles 10% as Tangshan curbs steel output (Business Standard/Reuters)"
+        url: "https://www.business-standard.com/article/international/china-dalian-iron-ore-tumbles-10-as-tangshan-curbs-steel-output-121030900714_1.html"
+
+  - driver: "HCC (Aus FOB)"
+    from: "2022-01-01"
+    to: "2022-06-30"
+    headline: >
+      Australian premium hard coking coal surged toward and past US$500/t in
+      Q1 2022 — up roughly 140% year-on-year by end-March.
+    why: >
+      Two forces stacked. First, Australian supply was already disrupted:
+      heavy rainfall and flooding in Queensland's Bowen Basin plus COVID-driven
+      workforce shortages cut production and rail transport. Then Russia's
+      invasion of Ukraine in late February removed Russian metallurgical-coal
+      supply from the seaborne market and added a war premium across all
+      energy and coal. With Russia a major met-coal and PCI exporter, buyers
+      scrambled for non-Russian tonnes, pushing Australian prices to records.
+    country: >
+      Australia (weather/COVID supply disruption) and Russia/Ukraine (the war
+      shock). The price is set in the seaborne market; the triggers were
+      Australian supply and the Russian invasion — not Chinese demand.
+    sources:
+      - title: "Resources and Energy Quarterly March 2022 — Met Coal (Aus Govt)"
+        url: "https://www.industry.gov.au/sites/default/files/minisite/static/c439c60d-5be7-4d19-8353-d70c1e8515c0/resources-and-energy-quarterly-march-2022/documents/Resources-and-Energy-Quarterly-March-2022-Met-Coal.pdf"
+      - title: "Coal prices spike as Russia-Ukraine crisis escalates (Wood Mackenzie)"
+        url: "https://www.woodmac.com/press-releases/coal-prices-spike-as-russia-ukraine-crisis-escalates/"
+
+  - driver: "Iron Ore 62%Fe (China CFR)"
+    from: "2023-10-01"
+    to: "2024-05-31"
+    headline: >
+      Iron ore held above $100/t and bounced on stimulus optimism, but the
+      rally faded into mid-2024 as property data stayed weak.
+    why: >
+      The late-2023/early-2024 strength was sentiment-driven: a wave of Chinese
+      property-support announcements lifted the ferrous complex on expectations
+      rather than realised demand. As analysts at Sinosteel Futures put it,
+      once the policy wave passed "the trading logic has gone back to
+      fundamentals" — and the fundamentals were weak. Property investment fell
+      ~9.8% YoY in Jan-Apr 2024 and new-home prices dropped at the fastest
+      pace in nine years, so the bounce could not hold.
+    country: >
+      China — both the lift (stimulus headlines) and the fade (weak property
+      fundamentals) were Chinese. Iron ore is the fastest-reacting gauge of
+      China demand expectations.
+    sources:
+      - title: "Iron ore falls as weak fundamentals outweigh property stimulus (Mining.com)"
+        url: "https://www.mining.com/web/iron-ore-price-falls-to-one-week-low-as-weak-fundamentals-outweigh-latest-property-stimulus/"
+      - title: "China stimulus optimism supports iron ore prices (ING Think)"
+        url: "https://think.ing.com/articles/china-stimulus-optimism-supports-iron-ore-prices/"
+
+  # --- Macro drivers around the Nov 2021 Supercycle Peak ---
+
+  - driver: "Crude Oil"
+    from: "2021-08-01"
+    to: "2022-01-31"
+    headline: >
+      Crude oil rose through most of 2021 (Brent ~$52 to ~$86) but wobbled
+      into year-end as the Omicron variant briefly hit demand expectations.
+    why: >
+      The 2021 oil rally was a post-COVID demand recovery meeting OPEC+ supply
+      restraint — the cartel deliberately added barrels slowly while US shale
+      held back on investor pressure. The late-November Omicron scare cut
+      prices ~16% in days on fears of renewed travel restrictions, before a
+      partial recovery as the variant proved milder than feared. For HRC, oil
+      matters as an energy-input and freight-cost proxy rather than a direct
+      driver — it moved on its own oil-market supply/demand balance, only
+      loosely coupled to the steel cycle.
+    country: >
+      Global / OPEC+ — the trigger was the OPEC+ supply policy and the global
+      Omicron demand scare, not anything specific to the steel market.
+    sources:
+      - title: "Global oil's comeback year presages more strength in 2022 (Reuters)"
+        url: "https://www.investing.com/news/commodities-news/global-oils-comeback-year-presages-more-strength-in-2022-2721570"
+      - title: "Oil dips towards $74, Omicron concerns dominate (CNBC)"
+        url: "https://www.cnbc.com/amp/2021/12/14/oil-markets-opec-asia-europe-coronavirus.html"
+
+  - driver: "BDI"
+    from: "2021-08-01"
+    to: "2022-01-31"
+    headline: >
+      The Baltic Dry Index peaked in October 2021 at multi-year highs, then
+      fell sharply into late 2021 and early 2022.
+    why: >
+      The 2021 BDI spike was a collision of strong dry-bulk commodity demand
+      (iron ore, coal) with pandemic-era port congestion and a tight bulk-
+      carrier fleet — capacity could not be added fast enough. The October
+      peak unwound as Chinese steel-output cuts curbed iron-ore shipping
+      demand and port congestion gradually eased. BDI also tracks bunker-fuel
+      (oil) cost, so it carried some of the energy-price signal too. As a
+      driver of HRC it is a coincident demand/freight gauge, not a lead cause.
+    country: >
+      China-led on the demand side (iron-ore output cuts reduced shipping
+      demand); global on the congestion side. Not a steel-market trigger in
+      itself.
+    sources:
+      - title: "The Baltic Dry Index, 1985-2022 (Geography of Transport Systems)"
+        url: "https://transportgeography.org/contents/chapter3/transport-costs/baltic-dry-index/"
+      - title: "Baltic dry index forecast: ML methods and SHAP explanations (PLOS One)"
+        url: "https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0325106"
+
+  - driver: "10-Year Treasury Yield (%)"
+    from: "2021-08-01"
+    to: "2022-06-30"
+    headline: >
+      The US 10-year Treasury yield rose materially from late 2021 into 2022
+      as the Federal Reserve pivoted to fighting inflation.
+    why: >
+      With US producer prices at multi-year highs, the Fed signalled faster
+      stimulus tapering and then rate hikes through late 2021 and into 2022,
+      pushing the 10-year yield up. This is a pure macro/monetary driver: it
+      reflects US inflation and Fed policy, not steel fundamentals. In the
+      decomposition it often shows a large raw beta because it is a small-
+      magnitude series (a few percent) regressed on a price in the hundreds —
+      the scale-aware |beta x sigma| weighting corrects for this, but the
+      driver's CAUSAL link to HRC is indirect (it works through the dollar
+      and through global demand conditions, not through the steel market).
+    country: >
+      United States — the trigger is entirely US monetary policy. Treat its
+      decomposition contribution as a macro-conditions proxy, not a steel
+      cause.
+    sources:
+      - title: "EIA: short-term crude oil prices to remain lower than 2021 highs"
+        url: "https://www.eia.gov/pressroom/releases/press491.php"
+
+  - driver: "DXY"
+    from: "2021-08-01"
+    to: "2022-06-30"
+    headline: >
+      The US dollar index strengthened from late 2021 into 2022 alongside the
+      Fed's hawkish turn.
+    why: >
+      The dollar rose as the Fed moved ahead of other major central banks on
+      tightening, and again as the Ukraine war drove safe-haven demand. A
+      stronger dollar mechanically pressures dollar-priced commodities,
+      including iron ore, since it raises the local-currency cost for buyers
+      outside the US. For HRC, DXY is a macro/financial transmission channel
+      (USD to commodity prices), not a steel-demand driver.
+    country: >
+      United States — driven by Fed policy and global safe-haven flows.
+    sources:
+      - title: "Oil dips towards $74, Omicron concerns dominate (CNBC)"
+        url: "https://www.cnbc.com/amp/2021/12/14/oil-markets-opec-asia-europe-coronavirus.html"
+
+  - driver: "Iron and Steel Scrap"
+    from: "2021-08-01"
+    to: "2024-05-31"
+    headline: >
+      Ferrous scrap broadly tracked the finished-steel cycle — elevated in
+      2021, easing through the 2022 correction, with stimulus-driven wobbles
+      in 2024.
+    why: >
+      Scrap is an alternative metallic input to iron ore (used heavily in
+      electric-arc-furnace steelmaking). Its price tends to move WITH the
+      steel cycle rather than lead it: when finished-steel demand and prices
+      are strong, mills bid up scrap; when the cycle turns, scrap follows
+      down. Around all three events scrap behaved as a coincident input-cost
+      indicator rather than an independent trigger.
+    country: >
+      Demand-following — no single-country trigger; scrap reflects the same
+      steel-cycle forces as HRC itself.
+    sources:
+      - title: "Global Steel November Production Drops as Green Push Hits China (Nasdaq)"
+        url: "https://www.nasdaq.com/articles/global-steel-november-production-drops-as-green-push-hits-china"
+
+  # --- Macro drivers around the Ukraine War correction ---
+
+  - driver: "Crude Oil"
+    from: "2022-01-01"
+    to: "2022-06-30"
+    headline: >
+      Crude oil spiked hard after Russia's invasion — Brent ran well above
+      $100/barrel in Q1-Q2 2022.
+    why: >
+      Russia is one of the world's largest oil exporters, so the invasion and
+      the sanctions/self-sanctioning that followed removed a large block of
+      supply from the market, spiking prices. For HRC this fed the energy-
+      input and freight-cost channel and added to the global inflation surge
+      that ultimately drove central-bank tightening and demand destruction.
+    country: >
+      Russia/Ukraine — the war was the direct trigger for the oil spike.
+    sources:
+      - title: "EIA Short-Term Energy Outlook"
+        url: "https://www.eia.gov/outlooks/steo/"
+
+  - driver: "BDI"
+    from: "2022-01-01"
+    to: "2022-06-30"
+    headline: >
+      Dry-bulk freight was volatile through the Ukraine-war window as grain
+      and coal trade routes were disrupted.
+    why: >
+      The war disrupted Black Sea grain and Russian coal flows, forcing
+      longer-haul re-routing that can lift tonne-mile demand and freight
+      rates, while war-risk insurance premiums rose for affected routes.
+      BDI's move here reflects shipping-market dislocation rather than a
+      steel-demand signal.
+    country: >
+      Russia/Ukraine — Black Sea trade disruption was the trigger.
+    sources:
+      - title: "The Baltic Dry Index, 1985-2022 (Geography of Transport Systems)"
+        url: "https://transportgeography.org/contents/chapter3/transport-costs/baltic-dry-index/"
+
+  # --- Drivers around the Feb 2024 China Stimulus Attempt ---
+
+  - driver: "Iron and Steel Scrap"
+    from: "2023-10-01"
+    to: "2024-05-31"
+    headline: >
+      Scrap bounced with the rest of the ferrous complex on stimulus optimism,
+      then faded as Chinese steel demand failed to confirm.
+    why: >
+      Like iron ore, scrap rose on the early-2024 stimulus narrative and gave
+      it back when property fundamentals stayed weak. China is also pushing
+      electric-arc-furnace (scrap-based) capacity for decarbonisation, a slow
+      structural support for scrap demand — but the 2024 move was cyclical
+      sentiment, not that structural shift.
+    country: >
+      China — same stimulus-headline-then-fade dynamic as iron ore.
+    sources:
+      - title: "China stimulus optimism supports iron ore prices (ING Think)"
+        url: "https://think.ing.com/articles/china-stimulus-optimism-supports-iron-ore-prices/"

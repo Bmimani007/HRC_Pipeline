@@ -31,7 +31,6 @@ from pipeline.diagnostics import adf_table, vif_table, correlation_matrix
 from pipeline.lead_lag import lead_lag_summary, rolling_correlations
 from pipeline import narrator
 from pipeline.spread import analyse_region as analyse_spread, cross_region_comparison
-from pipeline.regimes import classify_regimes
 from pipeline.attribution import rolling_attribution
 
 
@@ -147,8 +146,8 @@ def cached_lag_matrix(_region_data, cache_key: str, max_lag: int, file_mtime: fl
 
 @st.cache_data(show_spinner="Classifying regimes...")
 def cached_regimes(_region_data, cache_key: str, n_regimes: int, file_mtime: float):
-    return classify_regimes(_region_data.y, _region_data.X, n_regimes=n_regimes,
-                              region=_region_data.name)
+    # Regimes tab and Cyclicity tab now share ONE behavioural engine.
+    return cached_cyclicity(_region_data, cache_key, n_regimes, file_mtime)
 
 
 @st.cache_data(show_spinner="Computing attribution...")
@@ -160,9 +159,71 @@ def cached_attribution(_region_data, cache_key: str, window: int, file_mtime: fl
 @st.cache_data(show_spinner="Running cyclicity analysis...")
 def cached_cyclicity(_region_data, cache_key: str, n_regimes: int, file_mtime: float):
     from pipeline.cyclicity import analyse_cyclicity
+    # Pass drivers when the region has them; None for overview-only (US).
+    _drivers = _region_data.X if len(_region_data.drivers) > 0 else None
     return analyse_cyclicity(_region_data.y, region=_region_data.name,
                               currency=_region_data.currency,
+                              drivers=_drivers,
                               n_regimes=n_regimes)
+
+
+@st.cache_data(show_spinner="Building candles...")
+def cached_candles(_region_data, cache_key: str, file_mtime: float):
+    """Synthetic monthly candles + swing detection + a mechanical Elliott
+    count. See pipeline/candlestick.py for the data-honesty caveats."""
+    from pipeline.candlestick import (build_monthly_candles, detect_swings,
+                                      label_elliott)
+    cr = build_monthly_candles(_region_data.y, region=_region_data.name,
+                                currency=_region_data.currency)
+    swings = detect_swings(_region_data.y)
+    elliott = label_elliott(swings)
+    return cr, swings, elliott
+
+
+@st.cache_data(show_spinner="Building event list...")
+def cached_event_candidates(_region_data, cache_key: str, n_regimes: int,
+                             episodes_yaml: str, file_mtime: float):
+    """Assemble the merged event picker list (config episodes + detected
+    turns). Cached on region + regime count + episodes config."""
+    from pipeline.event_deep_dive import build_event_candidates
+    cyc = cached_cyclicity(_region_data, cache_key, n_regimes, file_mtime)
+    episodes = yaml.safe_load(episodes_yaml) or []
+    return build_event_candidates(cyc, episodes, _region_data.y)
+
+
+@st.cache_data(show_spinner="Analysing event...")
+def cached_event_deep_dive(_region_data, _dataset, cache_key: str, n_regimes: int,
+                            event_key: str, episodes_yaml: str,
+                            file_mtime: float):
+    """Run the full Event Deep-Dive for one chosen event. Cached on region +
+    regime count + which event was picked. Also assembles the cross-region
+    inputs (all regions' price + cyclicity) so the 'where' panel works."""
+    from pipeline.event_deep_dive import (analyse_event_deep_dive,
+                                          load_event_context)
+    cyc = cached_cyclicity(_region_data, cache_key, n_regimes, file_mtime)
+    episodes = yaml.safe_load(episodes_yaml) or []
+    cands = cached_event_candidates(_region_data, cache_key, n_regimes,
+                                     episodes_yaml, file_mtime)
+    chosen = next((c for c in cands if c.key == event_key), None)
+    if chosen is None:
+        return None
+    _drivers = _region_data.X if len(_region_data.drivers) > 0 else None
+
+    # Cross-region inputs — every region's price + its own cyclicity result.
+    all_regions = {}
+    for rname, rdata in _dataset.regions.items():
+        try:
+            rcyc = cached_cyclicity(rdata, f"{rname}_full", n_regimes, file_mtime)
+        except Exception:
+            rcyc = None
+        all_regions[rname] = {"y": rdata.y, "currency": rdata.currency,
+                              "cyc": rcyc}
+
+    return analyse_event_deep_dive(_region_data.y, _drivers, cyc, chosen,
+                                    region=_region_data.name,
+                                    currency=_region_data.currency,
+                                    all_regions=all_regions,
+                                    context=load_event_context())
 
 
 @st.cache_data(show_spinner="Loading macro calendar...")
@@ -455,6 +516,45 @@ COLORS = {"accent": "#1F4E79", "accent2": "#2D6A4F", "warning": "#C9540F",
           "rule": "#E5E9F0"}
 CHART_PALETTE = ["#1F4E79", "#2D6A4F", "#C9540F", "#7B5EA7",
                  "#A4161A", "#0F8B8D", "#5C6B7F", "#B8860B"]
+
+# Behavioural regime colours — keyed by LABEL so the same state is the same
+# colour in every tab (Regimes, Cyclicity, Event Deep-Dive). This is the
+# shared visual vocabulary that makes the story unfold consistently.
+REGIME_COLORS = {
+    "Stable Range":          "#5C6B7F",   # slate — calm
+    "Fundamental Uptrend":   "#2D6A4F",   # green — orderly rise
+    "Fundamental Downtrend": "#C9540F",   # amber — orderly decline
+    "Disrupted / High-Vol":  "#A4161A",   # red — turbulent / off-model
+}
+
+def regime_color(label: str) -> str:
+    # Match on the family prefix so disambiguated labels like
+    # "Fundamental Downtrend (sharp)" still map to the family colour.
+    if label in REGIME_COLORS:
+        return REGIME_COLORS[label]
+    fam = label.split(" (")[0]
+    base = REGIME_COLORS.get(fam, "#5C6B7F")
+    # Same-family duplicates: shade so they are visually distinct on charts.
+    if "(sharp)" in label or "(tier 2)" in label or "(tier 3)" in label:
+        return _shade(base, -0.22)   # darker
+    if "(mild)" in label or "(tier 1)" in label:
+        return _shade(base, 0.20)    # lighter
+    return base
+
+
+def _shade(hex_color: str, factor: float) -> str:
+    """Lighten (factor>0) or darken (factor<0) a hex colour."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    if factor >= 0:
+        r = int(r + (255 - r) * factor)
+        g = int(g + (255 - g) * factor)
+        b = int(b + (255 - b) * factor)
+    else:
+        r = int(r * (1 + factor))
+        g = int(g * (1 + factor))
+        b = int(b * (1 + factor))
+    return f"#{max(0,min(255,r)):02x}{max(0,min(255,g)):02x}{max(0,min(255,b)):02x}"
 
 # Plotly layout — PLOT_BASE intentionally contains NO axis or margin keys, so
 # downstream update_layout calls can freely add xaxis/yaxis/margin without
@@ -917,12 +1017,12 @@ _has_liquidity = bool(getattr(region, "liquidity_cols", []))
 # liquidity block configured in config.yaml (currently India only). This keeps
 # the tab strip uncluttered for regions where it wouldn't apply.
 if _has_liquidity:
-    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro, tab_liquidity = st.tabs([
-        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar", "Liquidity"
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast, tab_macro, tab_liquidity = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts", "Macro Calendar", "Liquidity"
     ])
 else:
-    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_attribution, tab_forecast, tab_macro = st.tabs([
-        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Attribution", "Forecasts", "Macro Calendar"
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast, tab_macro = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts", "Macro Calendar"
     ])
     tab_liquidity = None # sentinel; tab body guards on this
 tab_glossary = None # glossary is sidebar-only; tab body guarded
@@ -1124,6 +1224,91 @@ with tab_overview:
                 fig.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN, height=240, title=d)
                 style_axes(fig)
                 st.plotly_chart(fig, use_container_width=True)
+
+    # ===== CANDLESTICK VIEW (Phase 5) =====
+    st.markdown("---")
+    st.subheader("Candlestick view")
+    with st.expander("Monthly candles + optional Elliott-wave overlay",
+                     expanded=False):
+        # Honest data caveat — stated up front, before the chart.
+        st.warning(
+            "**Synthetic candles.** This pipeline's HRC data is **monthly and "
+            "close-only** — there is no intraday open/high/low. Each candle is "
+            "built as open = previous month's close, close = current close, so "
+            "it is a **pure body with no wicks**: it shows the size and "
+            "direction of each month's close-to-close move, nothing more. It is "
+            "an honest re-rendering of the same price line shown above — not a "
+            "claim about intra-month trading ranges.")
+
+        try:
+            cr, swings, elliott = cached_candles(region, f"{region_pick}_full",
+                                                  file_mtime)
+        except Exception as e:
+            st.error(f"Candle build failed: {type(e).__name__}: {e}")
+            cr, swings, elliott = None, None, None
+
+        if cr is not None and len(cr.candles) > 0:
+            cdf = cr.candles
+            # date filter to the sidebar range for consistency with other charts
+            cdf = cdf.loc[(cdf.index >= pd.Timestamp(date_range[0])) &
+                          (cdf.index <= pd.Timestamp(date_range[1]))]
+
+            show_elliott = st.checkbox(
+                "Show Elliott-wave overlay (optional, not a forecast)",
+                value=False, key="elliott_toggle")
+
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=cdf.index,
+                open=cdf["open"], high=cdf["high"],
+                low=cdf["low"], close=cdf["close"],
+                increasing_line_color=COLORS["accent2"],
+                decreasing_line_color=COLORS["danger"],
+                name="Monthly candle",
+                whiskerwidth=0))
+
+            if show_elliott:
+                # Disclaimer FIRST — before the overlay is read.
+                st.info(f"⚠️ {elliott.disclaimer}")
+                if elliott.available and len(elliott.labels) > 0:
+                    el = elliott.labels
+                    # only plot wave points inside the visible window
+                    elv = el[(el["date"] >= cdf.index.min()) &
+                             (el["date"] <= cdf.index.max())]
+                    if len(elv) > 0:
+                        fig.add_trace(go.Scatter(
+                            x=elv["date"], y=elv["price"],
+                            mode="lines+markers+text",
+                            line=dict(color=COLORS["ink"], width=1.4,
+                                      dash="dot"),
+                            marker=dict(size=9, color=COLORS["warning"],
+                                        symbol="diamond"),
+                            text=elv["wave"], textposition="top center",
+                            textfont=dict(size=13, color=COLORS["ink"],
+                                          family="Inter"),
+                            name="Elliott count"))
+                        st.caption(elliott.note)
+                    else:
+                        st.caption("No Elliott swing points fall inside the "
+                                   "current date range — widen the date filter "
+                                   "in the sidebar.")
+                else:
+                    st.caption(elliott.note if elliott else
+                               "Elliott overlay unavailable.")
+
+            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=460,
+                               yaxis_title=f"{currency}/t",
+                               xaxis_rangeslider_visible=False,
+                               legend=dict(orientation="h", y=-0.12))
+            style_axes(fig)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.caption(
+                "Green = month closed up, red = month closed down. Because the "
+                "candles have no wicks, two adjacent candles always touch — the "
+                "open of each is the close of the last.")
+        else:
+            st.info("Not enough price history to build candles for this region.")
 
 
 # ===== SPREAD =====
@@ -1336,38 +1521,78 @@ with tab_regimes:
         if len(selected_drivers) == 0:
             st.warning("Select at least one driver in the sidebar.")
         else:
-            n_reg = st.slider("Number of regimes", 2, 5, 3)
+            st.subheader("Market Regimes — behavioural classification")
+            st.caption(
+                "Regimes are defined by how the price *behaves* — volatility, "
+                "trend, drawdown and how well the drivers explain the move — "
+                "not by price level. Diagnostics told us which drivers matter; "
+                "lead/lag told us which ones lead. This tab asks the next "
+                "question: do those relationships hold in every market state, "
+                "or only some? The states below are the answer."
+            )
+            n_reg = st.slider("Number of regimes", 3, 6, 4,
+                              help="4 is the presentation default. 3-6 for exploration.")
             regimes = cached_regimes(filt_region, filter_key, n_reg, file_mtime)
 
-            # Live interpretation
-            try:
-                render_interpretation(
-                    narrator.narrate_regimes(regimes, currency),
-                    label="Regimes interpretation",
-                    settings_summary=f"Region: {region_pick.title()}, Regimes: {n_reg}, "
-                                      f"Drivers: {len(selected_drivers)}",
-                )
-            except Exception:
-                pass
+            cur = regimes.regime_profiles[regimes.current_regime]
+            st.metric("Current regime", cur.label,
+                      f"{cur.n_months} months total in this state")
 
-            st.metric("Current regime", f"Regime {regimes.current_regime}",
-                       f"of {regimes.n_regimes}")
-            # Plot
+            # ----- Fingerprint cards -----
+            st.markdown("##### Regime fingerprints")
+            fp = regimes.regime_fingerprint
+            cols = st.columns(len(regimes.regime_profiles))
+            for i, p in enumerate(regimes.regime_profiles):
+                frow = fp[fp["label"] == p.label].iloc[0] if (fp is not None and
+                        (fp["label"] == p.label).any()) else None
+                c = regime_color(p.label)
+                with cols[i]:
+                    st.markdown(
+                        f"<div style='border-left:5px solid {c};padding:6px 10px;"
+                        f"background:#f6f7f9;border-radius:4px'>"
+                        f"<b style='color:{c}'>{p.label}</b><br>"
+                        f"<small>{p.n_months} months · {p.n_spells} spells · "
+                        f"avg {p.avg_spell_duration:.1f}m</small></div>",
+                        unsafe_allow_html=True)
+                    st.metric("Avg monthly return", f"{p.avg_monthly_return_pct:+.1f}%")
+                    if frow is not None:
+                        st.caption(
+                            f"Volatility: {frow['vol']:.3f}  ·  "
+                            f"Trend: {frow['trend']:+.1f}%  ·  "
+                            f"Drawdown: {frow['drawdown']:.0f}%"
+                            + (f"  ·  Driver coherence: {frow['coherence']:.2f}"
+                               if pd.notna(frow.get('coherence')) else ""))
+
+            # ----- Behaviourally-coloured price chart -----
+            st.markdown("##### Price path by regime")
             target = filt_y
+            lbl = regimes.regime_labels
+            id_to_label = {p.regime_id: p.label for p in regimes.regime_profiles}
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=target.index, y=target.values, mode="lines",
-                                      line=dict(color=COLORS["ink"], width=1.5),
-                                      name="Price"))
-            for r in range(regimes.n_regimes):
-                mask = regimes.labels == r
-                fig.add_trace(go.Scatter(x=target.index[mask], y=target.values[mask],
-                                          mode="markers", name=f"Regime {r}",
-                                          marker=dict(size=8, opacity=0.7,
-                                                       color=CHART_PALETTE[r % len(CHART_PALETTE)])))
-            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440, yaxis_title=f"{currency}/t")
+                                      line=dict(color=COLORS["ink"], width=1.2),
+                                      name="Price", showlegend=False))
+            for p in regimes.regime_profiles:
+                mask = lbl == p.regime_id
+                idx = lbl.index[mask]
+                fig.add_trace(go.Scatter(
+                    x=idx, y=target.reindex(idx).values, mode="markers",
+                    name=p.label,
+                    marker=dict(size=8, opacity=0.8, color=regime_color(p.label))))
+            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
+                              yaxis_title=f"{currency}/t")
             style_axes(fig)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(regimes.regime_stats, use_container_width=True, hide_index=True)
+
+            with st.expander("📝 Interpretation", expanded=False):
+                st.markdown(
+                    f"The engine identified **{n_reg} behavioural regimes** for "
+                    f"{region_pick.title()}. The market is currently in "
+                    f"**{cur.label}**. Note which regimes carry low *driver "
+                    f"coherence* — those are the states where prices moved for "
+                    f"reasons the drivers did not explain.\n\n"
+                    f"→ *Next: the Cyclicity tab shows how these regimes follow "
+                    f"one another and how long each tends to last.*")
 
 
 # ===== CYCLICITY =====
@@ -1404,15 +1629,15 @@ with tab_cyclicity:
         if cyc.cycle_stats.avg_amplitude_pct:
             c4.metric("Avg amplitude", f"{cyc.cycle_stats.avg_amplitude_pct:.1f}%")
 
-        # Regime-coloured price chart
-        st.subheader("Regime classification (Multi-feature GMM)")
+        # Regime-coloured price chart — shared behavioural colour vocabulary
+        st.subheader("Regime classification (behavioural engine)")
+        st.caption("Same regimes, same colours as the Regimes tab — here we "
+                   "look at how they sequence and cycle.")
         target = region.y
-        palette = [COLORS["danger"], COLORS["muted"], COLORS["warning"], COLORS["accent2"]]
-        if cyc.n_regimes > 4:
-            palette = CHART_PALETTE[:cyc.n_regimes]
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=target.index, y=target.values, mode="lines",
-                                  line=dict(color=COLORS["ink"], width=1.5), name="Price"))
+                                  line=dict(color=COLORS["ink"], width=1.2),
+                                  name="Price", showlegend=False))
         for r in range(cyc.n_regimes):
             mask = cyc.regime_labels == r
             if mask.sum() == 0: continue
@@ -1420,9 +1645,9 @@ with tab_cyclicity:
             vals = target.reindex(idx).values
             label = cyc.regime_profiles[r].label
             fig.add_trace(go.Scatter(x=idx, y=vals, mode="markers",
-                                       name=f"R{r}: {label}",
-                                       marker=dict(size=8, opacity=0.75,
-                                                    color=palette[r % len(palette)])))
+                                       name=label,
+                                       marker=dict(size=8, opacity=0.8,
+                                                    color=regime_color(label))))
         fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
                            yaxis_title=f"{currency}/t",
                            legend=dict(orientation="h", y=-0.15))
@@ -1468,25 +1693,537 @@ with tab_cyclicity:
         style_axes(fig)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Markov transition matrix
-        st.subheader("Markov transition matrix")
+        # Markov transition matrix — with plain-language "what comes next"
+        st.subheader("What usually comes next")
         tm = cyc.transition_matrix
-        labels = [f"R{i}" for i in range(cyc.n_regimes)]
-        fig = go.Figure(data=go.Heatmap(
-            z=tm.values, x=labels, y=labels,
-            colorscale=[[0, "white"], [0.5, COLORS["accent"]], [1, COLORS["ink"]]],
-            zmin=0, zmax=1,
-            text=np.round(tm.values * 100, 1), texttemplate="%{text}%",
-            textfont=dict(size=11)))
-        fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=400,
-                           xaxis_title="To", yaxis_title="From",
-                           yaxis=dict(autorange="reversed"))
+        prof_by_id = {p.regime_id: p.label for p in cyc.regime_profiles}
+        next_lines = []
+        for i in range(cyc.n_regimes):
+            row = tm.iloc[i].values.copy()
+            row[i] = -1  # exclude self-persistence to find the next *different* state
+            j = int(np.argmax(row))
+            p_next = tm.iloc[i, j]
+            stay = cyc.self_persistence.get(i, 0.0)
+            name_i = prof_by_id.get(i, 'R'+str(i))
+            name_j = prof_by_id.get(j, 'R'+str(j))
+            if stay >= 0.85:
+                next_lines.append(
+                    f"- From **{name_i}**: highly persistent — stays "
+                    f"{stay*100:.0f}% month-to-month. Once in this state the "
+                    f"market tends to grind on; exits are rare."
+                )
+            elif p_next > 0:
+                next_lines.append(
+                    f"- From **{name_i}**: stays {stay*100:.0f}% "
+                    f"month-to-month; when it changes, most often → "
+                    f"**{name_j}** ({p_next*100:.0f}%)."
+                )
+
+        with st.expander("Transition matrix (heatmap)", expanded=False):
+            labels = [prof_by_id.get(i, f"R{i}") for i in range(cyc.n_regimes)]
+            fig = go.Figure(data=go.Heatmap(
+                z=tm.values, x=labels, y=labels,
+                colorscale=[[0, "white"], [0.5, COLORS["accent"]], [1, COLORS["ink"]]],
+                zmin=0, zmax=1,
+                text=np.round(tm.values * 100, 1), texttemplate="%{text}%",
+                textfont=dict(size=11)))
+            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=400,
+                               xaxis_title="To", yaxis_title="From",
+                               yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Cycle-position readout
+        st.subheader("Where we are in the cycle")
+        dom = cyc.cycle_stats.dominant_spectral_period_months
+        cur_lbl = cyc.regime_profiles[cyc.current_regime].label
+        exp_dur = cyc.expected_duration.get(cyc.current_regime)
+        # how many months the market has been in the current spell
+        _lab = cyc.regime_labels
+        _spell = 0
+        for v in reversed(_lab.values):
+            if v == cyc.current_regime:
+                _spell += 1
+            else:
+                break
+        cc1, cc2, cc3 = st.columns(3)
+        cc1.metric("Current state", cur_lbl)
+        cc2.metric("Months in this state", f"{_spell}",
+                   f"typical spell ~{exp_dur:.0f}m" if exp_dur else None)
+        if dom:
+            cc3.metric("Dominant cycle length", f"{dom:.0f} months")
+        if dom:
+            st.caption(
+                f"The price series shows a dominant rhythm of roughly "
+                f"**{dom:.0f} months**. The market has been in "
+                f"**{cur_lbl}** for **{_spell} month(s)**"
+                + (f", against a typical spell of about {exp_dur:.0f} months."
+                   if exp_dur else ".")
+            )
+
+        # Macro cycles — de-emphasised; the spectral period above is the
+        # robust 'cycle length' measure. Macro-cycle bracketing is shown only
+        # as supplementary detail since it is sensitive to regime boundaries.
+        if len(cyc.macro_cycles) > 0:
+            with st.expander("Macro cycles (supplementary)", expanded=False):
+                st.caption(
+                    "Calm → action → calm traversals. This bracketing is "
+                    "sensitive to where regime boundaries fall — treat the "
+                    "dominant cycle length above as the primary measure.")
+                st.dataframe(cyc.macro_cycles, use_container_width=True,
+                             hide_index=True)
+
+        with st.expander("📝 Interpretation", expanded=False):
+            st.markdown(
+                f"The transition table shows the **rhythm** — which state tends "
+                f"to follow which, and how long each persists. But rhythm alone "
+                f"does not tell us *why* any individual turn happened.\n\n"
+                f"→ *Next: the **Event Deep-Dive** tab opens up the sharp turning "
+                f"points one by one — decomposing each move into its driver "
+                f"contributions and the regime it occurred in.*")
+
+
+# ===== EVENT DEEP-DIVE (Phase 4) =====
+with tab_event:
+    if _overview_only:
+        _render_overview_only_placeholder("Event Deep-Dive")
+    else:
+        st.subheader("Event Deep-Dive — anatomy of a turning point")
+        st.caption(
+            "The Cyclicity tab showed the *rhythm* — which states follow which. "
+            "This tab opens up the sharp turns one at a time. Pick an event and "
+            "the panels below answer: what moved, why it moved (drivers + the "
+            "narrative story), where it moved (China vs India vs US), how turns "
+            "like it usually resolve, and whether today rhymes with it. "
+            "(Forward-looking macro events live in the Macro Calendar tab — this "
+            "tab is strictly backward-looking.)"
+        )
+
+        n_ev = st.slider("Number of GMM regimes", 2, 5, 4, key="event_nreg",
+                         help="Controls the behavioural engine used to label "
+                              "each event's regime. 4 is the default.")
+
+        # Episodes config -> YAML string for cache key stability
+        _episodes = config.get("analysis", {}).get("events", {}).get("episodes", [])
+        _episodes_yaml = yaml.safe_dump(_episodes, sort_keys=False)
+
+        try:
+            candidates = cached_event_candidates(
+                region, f"{region_pick}_full", n_ev, _episodes_yaml, file_mtime)
+        except Exception as e:
+            st.error(f"Could not build the event list: {type(e).__name__}: {e}")
+            st.stop()
+
+        if not candidates:
+            st.warning("No events found for this region — the engine detected "
+                       "no peaks/troughs and config.yaml has no episodes.")
+            st.stop()
+
+        # ----- Event picker -----
+        # Group the picker labels so config (named) events sort to the top.
+        def _pick_label(c):
+            tag = "★ " if c.source == "config" else "• "
+            return f"{tag}{c.label}  ·  {c.date.strftime('%b %Y')}"
+        _ordered = sorted(candidates,
+                          key=lambda c: (0 if c.source == "config" else 1, c.date))
+        _options = [c.key for c in _ordered]
+        _labels = {c.key: _pick_label(c) for c in _ordered}
+
+        chosen_key = st.selectbox(
+            "Choose an event", _options,
+            format_func=lambda k: _labels.get(k, k),
+            help="★ = named episode from config.yaml (these usually have a "
+                 "curated story attached) · • = turning point auto-detected by "
+                 "the cyclicity engine.")
+
+        try:
+            edd = cached_event_deep_dive(
+                region, dataset, f"{region_pick}_full", n_ev, chosen_key,
+                _episodes_yaml, file_mtime)
+        except Exception as e:
+            st.error(f"Event analysis failed: {type(e).__name__}: {e}")
+            st.stop()
+
+        if edd is None:
+            st.warning("Selected event could not be analysed.")
+            st.stop()
+
+        ev = edd.event
+
+        # Live interpretation
+        try:
+            render_interpretation(
+                narrator.narrate_event_deep_dive(edd, currency),
+                label="Event interpretation",
+                settings_summary=f"Region: {region_pick.title()}, "
+                                 f"Event: {ev.label}, GMM regimes: {n_ev}",
+            )
+        except Exception:
+            pass
+
+        # ----- Top-line metrics -----
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Event date", ev.date.strftime("%b %Y"),
+                  f"{ev.kind} · {ev.source}")
+        if edd.headline_move_pct == edd.headline_move_pct:
+            m2.metric(f"HRC move (±{edd.primary_window_m}m)",
+                      f"{edd.headline_move_pct:+.1f}%")
+        m3.metric("Regime at event", edd.event_regime_label or "—")
+        m4.metric("Rhyme with today", f"{edd.rhyme_score*100:.0f}%",
+                  "same regime now" if edd.regime_match else "different regime")
+
+        # ===== CURATED CONTEXT — the narrative 'why' =====
+        cur = edd.curated
+        if cur.matched:
+            conf_color = {"high": COLORS["accent2"], "medium": COLORS["warning"],
+                          "low": COLORS["muted"]}.get(cur.confidence.lower(),
+                                                      COLORS["muted"])
+            _asof = (f" &nbsp;·&nbsp; <span style='color:{COLORS['muted']}'>"
+                     f"researched {cur.as_of}</span>" if cur.as_of else "")
+            st.markdown(
+                f"<div style='border:1px solid {COLORS['rule']};border-left:6px "
+                f"solid {COLORS['accent']};border-radius:6px;padding:14px 18px;"
+                f"background:#fbfcfd;margin:10px 0'>"
+                f"<div style='font-size:0.72rem;font-weight:700;color:"
+                f"{COLORS['accent']};letter-spacing:0.07em;text-transform:"
+                f"uppercase'>Curated event context</div>"
+                f"<div style='font-size:1.05rem;font-weight:700;margin:3px 0'>"
+                f"{cur.title}</div>"
+                f"<span style='font-size:0.72rem;font-weight:700;color:white;"
+                f"background:{conf_color};padding:2px 8px;border-radius:10px'>"
+                f"curator confidence: {cur.confidence or 'n/a'}</span>{_asof}"
+                f"</div>", unsafe_allow_html=True)
+
+            if cur.what_changed:
+                st.markdown("**What changed**")
+                for b in cur.what_changed:
+                    st.markdown(f"- {b}")
+            if cur.why:
+                st.markdown("**Why it changed**")
+                st.markdown(
+                    f"<p style='font-size:0.93rem;line-height:1.6;color:#2D3748'>"
+                    f"{cur.why}</p>", unsafe_allow_html=True)
+            if cur.country_breakdown:
+                st.markdown("**Country breakdown** — how each market was affected")
+                cbcols = st.columns(len(cur.country_breakdown))
+                for i, (cty, txt) in enumerate(cur.country_breakdown.items()):
+                    with cbcols[i]:
+                        st.markdown(
+                            f"<div style='background:#f6f7f9;border-radius:5px;"
+                            f"padding:8px 12px;height:100%'>"
+                            f"<b style='color:{COLORS['accent']}'>{cty.upper()}</b>"
+                            f"<br><small>{txt}</small></div>",
+                            unsafe_allow_html=True)
+            if cur.watch_next:
+                with st.expander("What to watch for a repeat setup", expanded=False):
+                    for b in cur.watch_next:
+                        st.markdown(f"- {b}")
+            if cur.sources:
+                with st.expander("Sources", expanded=False):
+                    for s in cur.sources:
+                        if s.get("url"):
+                            st.markdown(f"- [{s['title']}]({s['url']})")
+                        else:
+                            st.markdown(f"- {s['title']}")
+                    st.caption("Context compiled from public reporting at the "
+                               "research date shown above and snapshotted — it "
+                               "does not auto-update. Verify magnitudes against "
+                               "the numeric panels below.")
+        else:
+            st.info(
+                "**No curated event write-up for this turning point.** This is "
+                "an auto-detected turn not yet documented in "
+                "`data/event_context.yaml`. The data-driven panels below apply "
+                "in full. To add a narrative, add a dated block to that file — "
+                "same workflow as the macro calendar.")
+
+        # ----- Driver-level causal tracing — the 'country analysis' layer -----
+        # Renders whether or not the EVENT itself was matched: a driver story
+        # can be informative even for an undocumented turn.
+        if cur.driver_stories:
+            st.markdown("##### Tracing the drivers — why each key driver moved")
+            st.caption(
+                "The decomposition (Panel 2) says which drivers moved HRC. "
+                "This goes one layer deeper: why did each of those drivers "
+                "itself move, and in which country did the trigger sit?")
+            for ds in cur.driver_stories:
+                with st.container():
+                    st.markdown(
+                        f"<div style='border-left:4px solid {COLORS['accent2']};"
+                        f"padding:8px 14px;background:#f7faf8;border-radius:4px;"
+                        f"margin:6px 0'>"
+                        f"<b>{ds.driver}</b>"
+                        + (f" — <span style='color:{COLORS['accent2']}'>"
+                           f"{ds.headline}</span>" if ds.headline else "")
+                        + "</div>", unsafe_allow_html=True)
+                    if ds.why:
+                        st.markdown(
+                            f"<p style='font-size:0.9rem;line-height:1.55;"
+                            f"color:#2D3748;margin:4px 0'>{ds.why}</p>",
+                            unsafe_allow_html=True)
+                    if ds.country:
+                        st.markdown(
+                            f"<p style='font-size:0.86rem;margin:2px 0'>"
+                            f"<b style='color:{COLORS['accent']}'>Where the "
+                            f"trigger sat:</b> {ds.country}</p>",
+                            unsafe_allow_html=True)
+                    if ds.sources:
+                        links = " · ".join(
+                            f"[{s['title'][:42]}]({s['url']})" if s.get("url")
+                            else s["title"][:42] for s in ds.sources)
+                        st.caption(f"Sources: {links}")
+
+        st.markdown("---")
+
+        # ===== PANEL 1: what moved =====
+        st.markdown("#### 1 · What moved around the event")
+        st.caption(f"Pre-event vs post-event averages for HRC and every driver, "
+                   f"at ±3 / ±{edd.primary_window_m}-month windows. Sorted by "
+                   f"absolute % change.")
+
+        # Event-anchored price chart
+        _t = region.y
+        _lo = ev.date - pd.DateOffset(months=edd.primary_window_m + 6)
+        _hi = ev.date + pd.DateOffset(months=edd.primary_window_m + 6)
+        _seg = _t.loc[_lo:_hi]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=_t.index, y=_t.values, mode="lines",
+                                  line=dict(color=COLORS["rule"], width=1),
+                                  name="Full history", showlegend=False))
+        if len(_seg) > 0:
+            fig.add_trace(go.Scatter(x=_seg.index, y=_seg.values, mode="lines+markers",
+                                      line=dict(color=COLORS["accent"], width=2.4),
+                                      marker=dict(size=5),
+                                      name="Event window", showlegend=False))
+        fig.add_vline(x=ev.date, line=dict(color=COLORS["danger"], width=2,
+                                            dash="dash"))
+        fig.add_vrect(x0=ev.date - pd.DateOffset(months=edd.primary_window_m),
+                      x1=ev.date + pd.DateOffset(months=edd.primary_window_m),
+                      fillcolor=COLORS["accent"], opacity=0.07, line_width=0)
+        fig.add_annotation(x=ev.date, y=1, yref="paper", showarrow=False,
+                           text=f"  {ev.date.strftime('%b %Y')}", xanchor="left",
+                           font=dict(color=COLORS["danger"], size=11))
+        fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=380,
+                           yaxis_title=f"{currency}/t",
+                           title=f"HRC price around {ev.label}")
+        style_axes(fig)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Macro cycles
-        if len(cyc.macro_cycles) > 0:
-            st.subheader("Macro cycles identified")
-            st.dataframe(cyc.macro_cycles, use_container_width=True, hide_index=True)
+        # Window table
+        wt = edd.window_table.copy()
+        if len(wt) > 0:
+            wt["_abs"] = wt["% Change"].abs()
+            wt = wt.sort_values(["Window", "_abs"], ascending=[True, False])
+            wt_display = wt.drop(columns="_abs").copy()
+            wt_display["Pre-avg"] = wt_display["Pre-avg"].map(
+                lambda v: f"{v:,.1f}" if pd.notna(v) else "—")
+            wt_display["Post-avg"] = wt_display["Post-avg"].map(
+                lambda v: f"{v:,.1f}" if pd.notna(v) else "—")
+            wt_display["% Change"] = wt_display["% Change"].map(
+                lambda v: f"{v:+.1f}%" if pd.notna(v) else "—")
+            st.dataframe(wt_display, use_container_width=True, hide_index=True)
+
+        # ===== PANEL 2: decomposition =====
+        st.markdown("#### 2 · Why it moved — driver decomposition")
+        if edd.decomposition_available and edd.contributions:
+            st.caption(
+                "Share of the windowed move attributable to each driver, using "
+                "the rolling-attribution betas in force during the window. "
+                "Contributions are scale-aware (|β·σ|) — the same method as the "
+                "Attribution tab — so a driver quoted in small units (e.g. a "
+                "rate, in %) cannot dominate the panel through unit scale alone.")
+            if edd.decomposition_note:
+                st.info(edd.decomposition_note)
+
+            contrib_df = pd.DataFrame([{
+                "Driver": c.driver,
+                "Contribution %": c.contribution_pct,
+                "Beta (in window)": c.beta_in_window,
+                "Driver move %": c.driver_change_pct,
+            } for c in edd.contributions])
+
+            valid = contrib_df.dropna(subset=["Contribution %"])
+            if len(valid) > 0:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=valid["Driver"], x=valid["Contribution %"],
+                    orientation="h",
+                    marker=dict(color=COLORS["accent"]),
+                    text=[f"{v:.0f}%" for v in valid["Contribution %"]],
+                    textposition="outside"))
+                fig.update_layout(**PLOT_BASE, margin=dict(l=50, r=40, t=30, b=40),
+                                   height=max(240, 52 * len(valid)),
+                                   xaxis_title="Share of explained move (%)",
+                                   yaxis=dict(autorange="reversed"))
+                style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+            disp = contrib_df.copy()
+            disp["Contribution %"] = disp["Contribution %"].map(
+                lambda v: f"{v:.1f}%" if pd.notna(v) else "—")
+            disp["Beta (in window)"] = disp["Beta (in window)"].map(
+                lambda v: f"{v:+,.3f}" if pd.notna(v) else "—")
+            disp["Driver move %"] = disp["Driver move %"].map(
+                lambda v: f"{v:+.1f}%" if pd.notna(v) else "—")
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+        else:
+            st.info(edd.decomposition_note or
+                    "Driver decomposition is not available for this event.")
+
+        # ===== PANEL 3: cross-region — where did it change =====
+        st.markdown("#### 3 · Where it changed — cross-region")
+        cross_avail = [c for c in edd.cross_region if c.available]
+        if len(cross_avail) >= 1:
+            st.caption(
+                f"The same calendar event, measured in each region's own HRC "
+                f"series over a ±{edd.primary_window_m}-month window. Different "
+                f"magnitudes — or different *directions* — tell you whether the "
+                f"shock was global or regional. Note: each region is in its own "
+                f"currency, so compare the % moves, not the levels.")
+            cr_cols = st.columns(len(edd.cross_region))
+            for i, c in enumerate(edd.cross_region):
+                with cr_cols[i]:
+                    if c.available:
+                        delta_c = (COLORS["danger"] if c.pct_change < 0
+                                   else COLORS["accent2"])
+                        st.markdown(
+                            f"<div style='text-align:center'>"
+                            f"<b style='font-size:1rem'>{c.region.upper()}</b>"
+                            f"</div>", unsafe_allow_html=True)
+                        st.metric(f"HRC move ({c.currency})",
+                                  f"{c.pct_change:+.1f}%")
+                        if c.regime_label:
+                            st.markdown(
+                                f"<div style='text-align:center'><small "
+                                f"style='color:{regime_color(c.regime_label)}'>"
+                                f"<b>{c.regime_label}</b></small></div>",
+                                unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            f"<div style='text-align:center'>"
+                            f"<b style='font-size:1rem'>{c.region.upper()}</b>"
+                            f"</div>", unsafe_allow_html=True)
+                        st.caption(c.note)
+
+            # Comparative bar
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=[c.region.upper() for c in cross_avail],
+                y=[c.pct_change for c in cross_avail],
+                marker=dict(color=[COLORS["danger"] if c.pct_change < 0
+                                   else COLORS["accent2"] for c in cross_avail]),
+                text=[f"{c.pct_change:+.1f}%" for c in cross_avail],
+                textposition="outside"))
+            fig.add_hline(y=0, line=dict(color=COLORS["muted"], width=1))
+            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=300,
+                               yaxis_title="HRC move around event (%)",
+                               title="Same event, three markets")
+            style_axes(fig)
+            st.plotly_chart(fig, use_container_width=True)
+
+            _signs = set(1 if c.pct_change > 0 else -1 for c in cross_avail
+                         if c.pct_change == c.pct_change)
+            if len(_signs) > 1:
+                st.caption("⚠️ The regions moved in **different directions** — "
+                           "a signature of a regional shock or transmission lag "
+                           "rather than a single synchronised global move.")
+            else:
+                st.caption("All regions moved the **same direction** — consistent "
+                           "with a broadly global shock, though intensity varied.")
+        else:
+            st.info("Cross-region comparison unavailable — the event date falls "
+                    "outside the other regions' data ranges.")
+
+        # ===== PANEL 4: recurrence =====
+        st.markdown("#### 4 · How turns like this usually resolve")
+        rec = edd.recurrence
+        if rec is not None and rec.n_events > 0:
+            st.caption(
+                f"Empirical base rate across all {rec.n_events} detected "
+                f"{rec.kind}s in {region_pick.title()}'s history. For each one we "
+                f"measure the forward % move and whether it resolved the "
+                f"'expected' way (price falls after a peak, rises after a trough).")
+            if not rec.sufficient:
+                st.warning(rec.note)
+
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                fig = go.Figure()
+                hs = rec.horizons
+                vals = [rec.avg_move_pct.get(h, float("nan")) for h in hs]
+                fig.add_trace(go.Bar(
+                    x=[f"{h}m" for h in hs], y=vals,
+                    marker=dict(color=[COLORS["danger"] if v < 0
+                                       else COLORS["accent2"] for v in vals]),
+                    text=[f"{v:+.1f}%" if pd.notna(v) else "—" for v in vals],
+                    textposition="outside"))
+                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=300,
+                                   yaxis_title="Avg forward move (%)",
+                                   title=f"Average move after a {rec.kind}")
+                style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
+            with rc2:
+                fig = go.Figure()
+                hits = [rec.hit_rate.get(h, float("nan")) * 100 for h in hs]
+                fig.add_trace(go.Bar(
+                    x=[f"{h}m" for h in hs], y=hits,
+                    marker=dict(color=COLORS["accent"]),
+                    text=[f"{v:.0f}%" if pd.notna(v) else "—" for v in hits],
+                    textposition="outside"))
+                fig.add_hline(y=50, line=dict(color=COLORS["muted"], dash="dot"))
+                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=300,
+                                   yaxis_title="Resolved as expected (%)",
+                                   yaxis=dict(range=[0, 105]),
+                                   title="Directional hit rate")
+                style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "The hit-rate bars show how often the move went the 'textbook' "
+                "direction. A bar near 50% means the turn carried little "
+                "directional information; well above 50% means turns of this "
+                "kind have been a genuine signal in this region.")
+        else:
+            st.info("Not enough detected turning points to build a recurrence "
+                    "base rate for this region.")
+
+        # ===== PANEL 5: live flag =====
+        st.markdown("#### 5 · Does today rhyme with this event?")
+        score = edd.rhyme_score
+        if score >= 0.66:
+            badge_c, verdict = COLORS["danger"], "STRONG RHYME"
+        elif score >= 0.34:
+            badge_c, verdict = COLORS["warning"], "PARTIAL RHYME"
+        else:
+            badge_c, verdict = COLORS["accent2"], "WEAK RHYME"
+        st.markdown(
+            f"<div style='border-left:6px solid {badge_c};padding:10px 16px;"
+            f"background:#f6f7f9;border-radius:4px;margin-bottom:8px'>"
+            f"<span style='font-weight:700;color:{badge_c};letter-spacing:0.06em'>"
+            f"{verdict}</span> &nbsp; "
+            f"<span style='font-size:1.4rem;font-weight:700'>{score*100:.0f}%</span>"
+            f"<br><small style='color:{COLORS['muted']}'>"
+            f"Three-part check: behavioural regime, drawdown-from-peak band, and "
+            f"6-month momentum sign — each worth one-third.</small></div>",
+            unsafe_allow_html=True)
+        for r in edd.rhyme_reasons:
+            st.markdown(f"- {r}")
+        st.caption(
+            f"The event sat in the **{edd.event_regime_label or 'n/a'}** regime. "
+            f"The market is currently in **{edd.current_regime_label}**. A high "
+            f"rhyme score does not predict a repeat — it flags that the *setup* "
+            f"resembles this event, so its recurrence base rate (Panel 4) is "
+            f"worth weighting more heavily right now.")
+
+        with st.expander("📝 Interpretation", expanded=False):
+            st.markdown(
+                f"This deep-dive turned one point on the price chart into a full "
+                f"story: the **move** ({edd.headline_move_pct:+.1f}% over "
+                f"±{edd.primary_window_m}m), the **drivers** behind it, the "
+                f"**narrative** of why, **where** across regions it landed, the "
+                f"**base rate** for how such turns resolve, and a **rhyme check** "
+                f"against today.\n\n"
+                f"→ *Next: the **Attribution** tab generalises Panel 2 — it shows "
+                f"the driver decomposition rolling continuously through time, not "
+                f"just around this one event.*")
 
 
 # ===== ATTRIBUTION =====

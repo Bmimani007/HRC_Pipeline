@@ -135,9 +135,10 @@ analysis:
     granger_significance: 0.05
     rolling_window: 12               # months for rolling correlations
 
-  regimes:
-    n_regimes: 3                     # K-means clusters
-    random_state: 42
+  # NOTE: the standalone K-means `regimes:` block has been retired. Regime
+  # classification now lives entirely in the behavioural GMM engine — see the
+  # `cyclicity:` block below, whose `n_regimes` controls it. The Regimes and
+  # Cyclicity dashboard tabs share that one engine.
 
   events:
     # Add or remove episodes here. Each one gets analysed in the report.

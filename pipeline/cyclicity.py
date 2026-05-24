@@ -87,36 +87,233 @@ class CyclicityResult:
     # Canonical regime ordering used by labeller
     regime_canonical_order: List[int] = field(default_factory=list)
 
+    # Behavioural fingerprint of each regime (vol/trend/drawdown/coherence)
+    regime_fingerprint: Optional[pd.DataFrame] = None
+    # Per-regime driver correlation + gated lead/lag (the funnel stress-test)
+    per_regime_driver_stats: Dict[int, dict] = field(default_factory=dict)
+    # Window used for rolling features / coherence
+    feature_window: int = 6
+
 
 # ---------- Step 1: Multi-feature GMM ----------
 
-def _build_features(target: pd.Series) -> pd.DataFrame:
+def _driver_coherence(target: pd.Series, drivers: pd.DataFrame,
+                       window: int = 6, max_drivers: int = 3) -> pd.Series:
     """
-    Construct the 5-dim feature vector per the reference report:
-        (1) log-level
-        (2) 1-month log-return
-        (3) 3-month cumulative log-return
-        (4) 3-month rolling volatility (std of returns)
-        (5) 6-month momentum (% change over 6 months)
+    Rolling explanatory power of the drivers over HRC returns.
+
+    For each month we regress HRC returns on driver returns over a trailing
+    `window`-month window and take the R-squared. High coherence => price
+    moves are explained by fundamentals. Low coherence => price is detaching
+    from its drivers (the statistical signature of a 'disrupted' regime).
+
+    IMPORTANT: with monthly data a 6-month window has only 6 rows, so the
+    regression must use a SMALL driver set or R-squared is mechanically 1.0
+    (more predictors than observations). We therefore use the `max_drivers`
+    drivers most correlated with HRC returns on the full sample — a proxy for
+    the trusted leading drivers surfaced by the diagnostics + lead/lag steps.
+
+    Returns a Series indexed by date. If no drivers are available the caller
+    should simply omit this feature (US / overview_only regions).
+    """
+    y_ret = np.log(target.replace(0, np.nan)).diff()
+
+    # Per-driver returns: log-return for strictly-positive price series,
+    # simple difference for anything that can be zero or negative (spreads,
+    # rates, WACR_Spread etc.). Taking log of a negative spread produces NaN
+    # and would silently destroy the sample.
+    x_ret_cols = {}
+    for col in drivers.columns:
+        s = drivers[col]
+        if (s.dropna() > 0).all():
+            x_ret_cols[col] = np.log(s.replace(0, np.nan)).diff()
+        else:
+            x_ret_cols[col] = s.diff()
+    x_ret = pd.DataFrame(x_ret_cols)
+    full = pd.concat([y_ret.rename("_y"), x_ret], axis=1).dropna()
+    if len(full) < window + 2 or full.shape[1] < 2:
+        return pd.Series(dtype=float)
+
+    # Pick the most informative drivers (|correlation| with HRC returns)
+    driver_cols = [c for c in full.columns if c != "_y"]
+    corrs = {c: abs(full["_y"].corr(full[c])) for c in driver_cols}
+    keep = sorted(corrs, key=corrs.get, reverse=True)[:max_drivers]
+    aligned = full[["_y"] + keep]
+
+    coh = {}
+    for i in range(window - 1, len(aligned)):
+        win = aligned.iloc[i - window + 1:i + 1]
+        yv = win["_y"].values
+        Xv = win[keep].values
+        if np.std(yv) < 1e-9:
+            coh[aligned.index[i]] = 0.0
+            continue
+        Xa = np.column_stack([np.ones(len(Xv)), Xv])
+        try:
+            beta, *_ = np.linalg.lstsq(Xa, yv, rcond=None)
+            resid = yv - Xa @ beta
+            ss_res = float(np.sum(resid ** 2))
+            ss_tot = float(np.sum((yv - yv.mean()) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+            # adjust for small-sample inflation
+            n, k = len(yv), len(keep)
+            if n - k - 1 > 0:
+                r2 = 1.0 - (1.0 - r2) * (n - 1) / (n - k - 1)
+            coh[aligned.index[i]] = float(min(max(r2, 0.0), 1.0))
+        except Exception:
+            coh[aligned.index[i]] = 0.0
+    s = pd.Series(coh, name="coherence")
+    # Back-fill the warm-up months rather than dropping them — coherence is
+    # the most lag-hungry feature and must not shrink the usable sample.
+    s = s.reindex(aligned.index).bfill().ffill()
+    return s
+
+
+def _build_features(target: pd.Series,
+                     drivers: Optional[pd.DataFrame] = None,
+                     window: int = 6) -> pd.DataFrame:
+    """
+    Construct the behavioural feature vector for regime clustering.
+
+    Price LEVEL is deliberately excluded — regimes describe how the price is
+    behaving, not where it sits. Features:
+        (1) 1-month log-return            -> short-term direction
+        (2) 3-month cumulative log-return -> medium-term direction
+        (3) 6-month momentum (% change)   -> trend
+        (4) 3-month rolling volatility    -> turbulence
+        (5) drawdown from running peak    -> distance below the highs
+        (6) driver coherence (optional)   -> fundamental vs disrupted
+
+    Feature (6) is included only when `drivers` is provided and non-empty
+    (China, India). For overview_only regions (US) the engine runs on the
+    five price-only features — the 'lite' engine.
     """
     log_p = np.log(target.replace(0, np.nan))
     r1 = log_p.diff()
     r3 = log_p.diff(3)
     vol3 = r1.rolling(3).std()
     mom6 = target.pct_change(6) * 100
-    feats = pd.DataFrame({
-        "log_level": log_p,
+    running_peak = target.cummax()
+    drawdown = (target - running_peak) / running_peak * 100
+
+    cols = {
         "ret_1m": r1,
         "ret_3m": r3,
         "vol_3m": vol3,
         "mom_6m": mom6,
-    }).dropna()
+        "drawdown": drawdown,
+    }
+
+    if drivers is not None and drivers.shape[1] > 0:
+        coh = _driver_coherence(target, drivers, window=window)
+        if len(coh) > 0:
+            cols["coherence"] = coh
+
+    feats = pd.DataFrame(cols).dropna()
     return feats
+
+
+def _label_by_fingerprint(labels: np.ndarray, feats: pd.DataFrame,
+                           n_regimes: int) -> tuple:
+    """
+    Assign behavioural labels by reading each cluster's feature fingerprint.
+
+    Regimes are NOT ordered by price level. They are characterised by their
+    mean volatility, trend (6m momentum) and driver coherence, then named:
+
+        Stable Range          - low vol, flat trend
+        Fundamental Uptrend   - rising trend, coherence holds
+        Fundamental Downtrend - falling trend, coherence holds
+        Disrupted / High-Vol  - high vol and/or coherence collapse
+
+    The cluster ids are then re-indexed 0..n-1 in a canonical *behavioural*
+    order (calm -> trending -> disrupted) so downstream code is deterministic.
+    Returns (new_labels array, ordered_label_list, fingerprint DataFrame).
+    """
+    fp_rows = []
+    for c in sorted(set(labels)):
+        mask = labels == c
+        seg = feats.iloc[mask]
+        fp_rows.append({
+            "cluster": c,
+            "vol": float(seg["vol_3m"].mean()),
+            "trend": float(seg["mom_6m"].mean()),
+            "drawdown": float(seg["drawdown"].mean()),
+            "coherence": float(seg["coherence"].mean())
+                          if "coherence" in seg else float("nan"),
+            "n": int(mask.sum()),
+        })
+    fp = pd.DataFrame(fp_rows).set_index("cluster")
+
+    has_coh = fp["coherence"].notna().any() and fp["coherence"].std() > 1e-6
+
+    # 'Disrupted' = the cluster(s) that genuinely stand out, judged RELATIVE
+    # to the other clusters rather than against a fixed cutoff:
+    #   - the single highest-volatility cluster is always Disrupted
+    #   - additionally, any cluster whose volatility exceeds the median by a
+    #     clear margin (>1.4x), or whose coherence is the lowest AND well
+    #     below the others, is Disrupted.
+    vol_median = fp["vol"].median()
+    top_vol_cluster = fp["vol"].idxmax()
+    disrupted = set()
+    for c in fp.index:
+        is_top_vol = (c == top_vol_cluster)
+        vol_outlier = fp.loc[c, "vol"] > 1.4 * vol_median
+        coh_outlier = False
+        if has_coh:
+            coh_min = fp["coherence"].min()
+            coh_outlier = (fp.loc[c, "coherence"] == coh_min and
+                           fp.loc[c, "coherence"] < fp["coherence"].median() - 0.15)
+        if is_top_vol or vol_outlier or coh_outlier:
+            disrupted.add(c)
+
+    def _name(c) -> str:
+        if c in disrupted:
+            return "Disrupted / High-Vol"
+        trend = fp.loc[c, "trend"]
+        if trend >= 4.0:
+            return "Fundamental Uptrend"
+        if trend <= -4.0:
+            return "Fundamental Downtrend"
+        return "Stable Range"
+
+    fp["label"] = [_name(c) for c in fp.index]
+
+    # Disambiguate same-family duplicates (e.g. two 'Fundamental Downtrend'
+    # clusters) by appending a volatility qualifier so every regime label is
+    # unique — required for clean transition-language and colour mapping.
+    for fam in fp["label"].unique():
+        members = fp.index[fp["label"] == fam].tolist()
+        if len(members) > 1:
+            ranked = fp.loc[members, "vol"].sort_values()
+            if len(members) == 2:
+                quals = ["(mild)", "(sharp)"]
+            else:
+                quals = [f"(tier {i+1})" for i in range(len(members))]
+            for q, cl in zip(quals, ranked.index):
+                fp.loc[cl, "label"] = f"{fam} {q}"
+
+    # Canonical sort: calm first, then up, down, disrupted last.
+    # Strip any "(qualifier)" so the family rank still applies.
+    rank = {"Stable Range": 0, "Fundamental Uptrend": 1,
+            "Fundamental Downtrend": 2, "Disrupted / High-Vol": 3}
+    def _fam(lbl: str) -> str:
+        return lbl.split(" (")[0]
+    fp["sort_key"] = fp["label"].map(lambda l: rank.get(_fam(l), 9)) \
+                     + fp["vol"].rank(pct=True) * 0.1
+    fp = fp.sort_values("sort_key")
+    relabel = {old: new for new, old in enumerate(fp.index)}
+    new_labels = np.array([relabel[l] for l in labels])
+    fp_ordered = fp.reset_index()
+    fp_ordered.index = range(len(fp_ordered))
+    ordered_labels = list(fp_ordered["label"])
+    return new_labels, ordered_labels, fp_ordered
 
 
 def _label_regimes_by_target(labels: np.ndarray, target_aligned: pd.Series,
                               n_regimes: int) -> tuple:
-    """Relabel so regime 0 has lowest mean target, regime n-1 has highest."""
+    """Legacy price-ordering labeller. Retained for backward compatibility
+    only; the engine now uses _label_by_fingerprint."""
     means = pd.Series(target_aligned.values).groupby(labels).mean().sort_values()
     relabel = {old: new for new, old in enumerate(means.index)}
     new_labels = np.array([relabel[l] for l in labels])
@@ -124,10 +321,11 @@ def _label_regimes_by_target(labels: np.ndarray, target_aligned: pd.Series,
     return new_labels, canonical_order
 
 
-def _fit_gmm(target: pd.Series, n_regimes: int = 4,
-             random_state: int = 42) -> tuple:
-    """Returns (labels Series indexed by date, canonical_order list)."""
-    feats = _build_features(target)
+def _fit_gmm(target: pd.Series, drivers: Optional[pd.DataFrame] = None,
+             n_regimes: int = 4, random_state: int = 42,
+             window: int = 6) -> tuple:
+    """Returns (labels Series, ordered label list, fingerprint DataFrame)."""
+    feats = _build_features(target, drivers=drivers, window=window)
     if len(feats) < n_regimes * 5:
         raise ValueError(
             f"Not enough observations ({len(feats)}) for {n_regimes}-regime GMM. "
@@ -140,11 +338,10 @@ def _fit_gmm(target: pd.Series, n_regimes: int = 4,
                                 random_state=random_state, n_init=5,
                                 max_iter=200)
         raw_labels = gmm.fit_predict(X)
-    target_aligned = target.loc[feats.index]
-    new_labels, canonical = _label_regimes_by_target(raw_labels, target_aligned,
-                                                       n_regimes)
+    new_labels, ordered_labels, fingerprint = _label_by_fingerprint(
+        raw_labels, feats, n_regimes)
     labels_series = pd.Series(new_labels, index=feats.index, name="regime")
-    return labels_series, canonical
+    return labels_series, ordered_labels, fingerprint
 
 
 # ---------- Step 2: Regime profiles ----------
@@ -184,15 +381,23 @@ def _spell_stats(labels: pd.Series, regime_id: int) -> tuple:
 
 
 def _build_regime_profiles(target: pd.Series, labels: pd.Series,
-                            n_regimes: int) -> List[RegimeProfile]:
+                            n_regimes: int,
+                            label_names: Optional[List[str]] = None
+                            ) -> List[RegimeProfile]:
     target_in = target.loc[labels.index]
     returns = target_in.pct_change() * 100
+
+    def _lbl(r: int) -> str:
+        if label_names is not None and r < len(label_names):
+            return label_names[r]
+        return _label_for(n_regimes, r)
+
     profiles = []
     for r in range(n_regimes):
         mask = labels == r
         if mask.sum() == 0:
             profiles.append(RegimeProfile(
-                regime_id=r, label=_label_for(n_regimes, r),
+                regime_id=r, label=_lbl(r),
                 n_months=0, mean_target=float("nan"), std_target=float("nan"),
                 avg_monthly_return_pct=float("nan"),
                 n_spells=0, avg_spell_duration=0.0,
@@ -202,7 +407,7 @@ def _build_regime_profiles(target: pd.Series, labels: pd.Series,
         n_spells, avg_dur = _spell_stats(labels, r)
         profiles.append(RegimeProfile(
             regime_id=r,
-            label=_label_for(n_regimes, r),
+            label=_lbl(r),
             n_months=int(mask.sum()),
             mean_target=float(target_in[mask].mean()),
             std_target=float(target_in[mask].std()),
@@ -346,22 +551,23 @@ def _transition_matrix(labels: pd.Series, n_regimes: int) -> tuple:
 
 # ---------- Step 7: Macro cycle identification ----------
 
-def _identify_macro_cycles(labels: pd.Series, target: pd.Series) -> pd.DataFrame:
+def _identify_macro_cycles(labels: pd.Series, target: pd.Series,
+                            calm_regime: int = 0) -> pd.DataFrame:
     """
-    A macro cycle is a contiguous traversal of regimes that contains the highest
-    regime (n-1). We find each appearance of the top regime and bracket it with
-    the surrounding lower-regime months. Reasonable approximation: every time
-    the labels return to their lowest regime is a 'reset', so a macro cycle is
-    the period between two consecutive resets that contains a top-regime visit.
+    A macro cycle is a contiguous traversal from one calm phase to the next
+    that contains a period of real action.
+
+    `calm_regime` is the id of the lowest-volatility regime (the natural
+    'reset' state). A reset is a run of that regime; a macro cycle is the
+    span between two consecutive resets that contains at least one visit to
+    a different regime (calm -> action -> calm).
     """
     if len(labels) == 0:
         return pd.DataFrame(columns=["start", "end", "duration_months",
                                        "peak_target", "primary_regimes"])
     arr = labels.values
-    n_regimes = int(arr.max()) + 1
-    top_r = n_regimes - 1
-    # Find runs of the lowest regime — each such run is a 'reset'
-    is_low = (arr == 0).astype(int)
+    # Runs of the calm anchor regime are 'resets'
+    is_low = (arr == calm_regime).astype(int)
     diff = np.diff(np.concatenate([[0], is_low, [0]]))
     low_starts = np.where(diff == 1)[0]
     low_ends = np.where(diff == -1)[0]
@@ -374,8 +580,8 @@ def _identify_macro_cycles(labels: pd.Series, target: pd.Series) -> pd.DataFrame
             if cycle_end <= cycle_start:
                 continue
             seg_labels = arr[cycle_start:cycle_end]
-            if not (seg_labels == top_r).any():
-                continue                            # no super-cycle peak in this window
+            if not (seg_labels != calm_regime).any():
+                continue                            # no real action in window
             seg_target = target.loc[labels.index[cycle_start:cycle_end]]
             cycles.append({
                 "start": str(labels.index[cycle_start].date()),
@@ -383,32 +589,122 @@ def _identify_macro_cycles(labels: pd.Series, target: pd.Series) -> pd.DataFrame
                 "duration_months": int(cycle_end - cycle_start),
                 "peak_target": float(seg_target.max()),
                 "primary_regimes": ", ".join(
-                    f"R{r}" for r in sorted(set(seg_labels)) if r != 0
+                    f"R{r}" for r in sorted(set(seg_labels)) if r != calm_regime
                 ),
             })
     return pd.DataFrame(cycles)
 
 
-# ---------- Master entry point ----------
+# ---------- Step 6.5: Per-regime driver statistics ----------
+
+LEADLAG_MIN_MONTHS = 15   # below this, per-regime lead/lag is not reported
+
+
+def _per_regime_driver_stats(target: pd.Series, drivers: pd.DataFrame,
+                              labels: pd.Series, n_regimes: int,
+                              max_lag: int = 6) -> Dict[int, dict]:
+    """
+    Within each regime's months, compute:
+      - correlation of HRC returns vs each driver's returns (always)
+      - best lead/lag of each driver vs HRC (only if regime has >= 15 months;
+        otherwise flagged 'insufficient sample')
+
+    This is the funnel stress-test: the same diagnostics + lead/lag statistics
+    from earlier tabs, recomputed regime by regime, to show they are not
+    stable across market states.
+    """
+    out: Dict[int, dict] = {}
+    if drivers is None or drivers.shape[1] == 0:
+        return out
+
+    y_ret = np.log(target.replace(0, np.nan)).diff()
+    # log-return for positive price series, simple diff for spreads/rates
+    x_ret_cols = {}
+    for col in drivers.columns:
+        s = drivers[col]
+        if (s.dropna() > 0).all():
+            x_ret_cols[col] = np.log(s.replace(0, np.nan)).diff()
+        else:
+            x_ret_cols[col] = s.diff()
+    x_ret = pd.DataFrame(x_ret_cols)
+
+    for r in range(n_regimes):
+        months = labels[labels == r].index
+        y_r = y_ret.loc[y_ret.index.intersection(months)].dropna()
+        corr = {}
+        leadlag = {}
+        enough = len(y_r) >= LEADLAG_MIN_MONTHS
+        for col in drivers.columns:
+            xr = x_ret[col]
+            joined = pd.concat([y_r.rename("y"), xr.rename("x")], axis=1).dropna()
+            if len(joined) >= 3:
+                corr[col] = float(joined["y"].corr(joined["x"]))
+            else:
+                corr[col] = float("nan")
+            if enough:
+                best_lag, best_abs = 0, -1.0
+                full = pd.concat([y_ret.rename("y"), xr.rename("x")],
+                                 axis=1).dropna()
+                for lag in range(-max_lag, max_lag + 1):
+                    shifted = full["x"].shift(lag)
+                    sub = pd.concat([full["y"], shifted], axis=1).dropna()
+                    sub = sub.loc[sub.index.intersection(months)]
+                    if len(sub) >= 5:
+                        c = sub.iloc[:, 0].corr(sub.iloc[:, 1])
+                        if c is not None and abs(c) > best_abs:
+                            best_abs, best_lag = abs(c), lag
+                leadlag[col] = {"best_lag": best_lag, "abs_corr": best_abs}
+            else:
+                leadlag[col] = None
+        out[r] = {
+            "n_return_obs": int(len(y_r)),
+            "correlation": corr,
+            "leadlag": leadlag,
+            "leadlag_available": enough,
+        }
+    return out
+
+
+
 
 def analyse_cyclicity(target: pd.Series, region: str = "",
                        currency: str = "USD",
+                       drivers: Optional[pd.DataFrame] = None,
                        n_regimes: int = 4,
                        random_state: int = 42,
                        prominence_pct: float = 5.0,
-                       min_distance_months: int = 4) -> CyclicityResult:
+                       min_distance_months: int = 4,
+                       feature_window: int = 6) -> CyclicityResult:
     """
     Run the full cyclicity pipeline on one target series.
+
+    If `drivers` is provided, the regime engine adds a driver-coherence
+    feature and computes per-regime driver statistics. For overview_only
+    regions (US, no drivers) pass drivers=None — the engine runs the
+    five-feature 'lite' version automatically.
     """
     target = target.dropna().sort_index()
     if len(target) < n_regimes * 5:
         # Fall back to fewer regimes if not enough data
         n_regimes = max(2, len(target) // 5)
 
-    # 1. Regime identification
-    labels, canonical = _fit_gmm(target, n_regimes=n_regimes,
-                                   random_state=random_state)
-    profiles = _build_regime_profiles(target, labels, n_regimes)
+    # Align drivers to target if provided
+    if drivers is not None and drivers.shape[1] > 0:
+        drivers = drivers.reindex(target.index)
+    else:
+        drivers = None
+
+    # 1. Regime identification (behavioural fingerprint labelling)
+    # Guard: ensure enough USABLE feature rows, not just raw months.
+    _feat_n = len(_build_features(target, drivers=drivers, window=feature_window))
+    if _feat_n < n_regimes * 5:
+        n_regimes = max(2, _feat_n // 5)
+    labels, ordered_labels, fingerprint = _fit_gmm(
+        target, drivers=drivers, n_regimes=n_regimes,
+        random_state=random_state, window=feature_window)
+    canonical = list(range(n_regimes))
+    profiles = _build_regime_profiles(target, labels, n_regimes,
+                                       label_names=ordered_labels)
 
     # 2. Peaks/troughs (full sample)
     peaks, troughs = _find_peaks_troughs(target,
@@ -451,8 +747,15 @@ def analyse_cyclicity(target: pd.Series, region: str = "",
     # 5. Markov transitions
     trans_df, self_persist, expected_dur = _transition_matrix(labels, n_regimes)
 
-    # 6. Macro cycles
-    macro_cycles = _identify_macro_cycles(labels, target)
+    # 6. Macro cycles — anchored on the calmest (lowest-vol) regime
+    _calm = 0
+    if fingerprint is not None and "vol" in fingerprint.columns:
+        _calm = int(fingerprint["vol"].astype(float).idxmin())
+    macro_cycles = _identify_macro_cycles(labels, target, calm_regime=_calm)
+
+    # 7. Per-regime driver stats (funnel stress-test)
+    per_regime_stats = _per_regime_driver_stats(
+        target, drivers, labels, n_regimes) if drivers is not None else {}
 
     return CyclicityResult(
         region=region,
@@ -472,4 +775,7 @@ def analyse_cyclicity(target: pd.Series, region: str = "",
         expected_duration=expected_dur,
         macro_cycles=macro_cycles,
         regime_canonical_order=canonical,
+        regime_fingerprint=fingerprint,
+        per_regime_driver_stats=per_regime_stats,
+        feature_window=feature_window,
     )

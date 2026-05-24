@@ -95,21 +95,37 @@ A browser tab opens automatically. Edit the Excel file, click 🔄 **Refresh dat
 | Section              | What it shows                                                   |
 |----------------------|------------------------------------------------------------------|
 | Cover                | High-level KPIs across all regions                              |
-| Region Overview      | HRC price history per region                                    |
+| Region Overview      | HRC price history per region; synthetic monthly candlestick view |
 | **Spread Analysis**  | Monthly spread, FY averages, percentiles, decomposition         |
 | Diagnostics          | Correlation matrix, multicollinearity (VIF), stationarity (ADF) |
 | Lead/Lag             | CCF & Granger causality — which drivers lead price?             |
 | Models               | ARIMAX + ARDL forecasts with 95% CI, GARCH volatility           |
-| Regimes              | K-means classification of market states                         |
+| Cyclicity & Regimes  | Behavioural GMM regime engine — volatility/trend/coherence states, peaks/troughs, Markov transitions (shared by the Regimes + Cyclicity dashboard tabs) |
+| **Event Deep-Dive**  | Anatomy of each turning point: what moved, driver decomposition, curated "why" + driver-level causal tracing, cross-region comparison, recurrence base rate |
 | Attribution          | Rolling regression — driver importance over time                |
-| Events               | Pre/post analysis around key episodes (e.g., Ukraine war)       |
 | **Cross-Region**     | China vs India spread comparison                                |
 | 💧 **Liquidity**     | (Dashboard only, India only) — RBI policy stance, WACR spread, stress gauge, regime performance, lead-lag |
+
+The dashboard has the same surfaces as ten tabs, plus a synthetic-candlestick
+view (with an optional, clearly-labelled Elliott-wave overlay) on the Overview
+tab. **Note on candlesticks:** the data is monthly close-only, so candles are
+synthetic (open = previous month's close, no wicks) — an honest re-rendering of
+the close series, not intra-month trading-range data. The dashboard says so.
 
 The spread formula matches your Tata BPM deck:
 ```
 Spread = HRC − (1.6 × Iron Ore + 0.9 × HCC)
 ```
+
+### Event Deep-Dive context — `data/event_context.yaml`
+
+The Event Deep-Dive tab's narrative "why" (and the driver-level causal
+tracing) comes from `data/event_context.yaml`. It is research-compiled from
+public reporting and **snapshotted** — each block carries an `as_of` date, so
+a regenerated report is reproducible rather than a moving target. To extend or
+refresh it, use `MASTER_PROMPT_EVENT_CONTEXT.txt` (the same paste-into-Claude
+workflow as the macro calendar). If an event has no curated entry, the tab
+still shows all the data-driven panels and simply says so.
 
 ---
 
@@ -155,16 +171,25 @@ HRC_Pipeline/
 ├── run.py                   ← THE entry point
 │
 ├── data/
-│   └── Raw_data.xlsx        ← edit to add data
+│   ├── Raw_data.xlsx        ← edit to add data
+│   ├── macro_calendar.yaml  ← macro events (auto-rolling)
+│   ├── event_context.yaml   ← Event Deep-Dive curated "why" (snapshotted)
+│   └── glossary.yaml        ← glossary terms
 │
 ├── pipeline/                ← analytical engine
 │   ├── data_loader.py
 │   ├── diagnostics.py
 │   ├── lead_lag.py
 │   ├── spread.py
-│   ├── regimes.py
+│   ├── cyclicity.py         ← behavioural GMM regime engine (Regimes+Cyclicity)
 │   ├── attribution.py
 │   ├── events.py
+│   ├── event_deep_dive.py   ← Event Deep-Dive: decomposition + tracing + recurrence
+│   ├── candlestick.py       ← synthetic monthly candles + Elliott overlay
+│   ├── liquidity.py
+│   ├── macro_calendar.py
+│   ├── cross_region.py
+│   ├── narrator.py
 │   └── orchestrator.py
 │
 ├── models/                  ← swappable forecasting models

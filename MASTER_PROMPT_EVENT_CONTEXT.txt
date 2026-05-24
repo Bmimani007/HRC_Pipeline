@@ -1,0 +1,106 @@
+================================================================================
+MASTER PROMPT — Refresh event_context.yaml (Event Deep-Dive context)
+================================================================================
+
+WHAT THIS IS
+  The Event Deep-Dive tab shows a curated "why" for each turning point: the
+  narrative behind the move, plus driver-level causal tracing (why each
+  contributing driver itself moved, and in which country the trigger sat).
+  That content lives in data/event_context.yaml. This prompt regenerates or
+  extends it — the same workflow you already use for the macro calendar.
+
+WHEN TO USE
+  - You added a new episode to config.yaml (analysis.events.episodes) and want
+    a curated write-up for it.
+  - An auto-detected turning point keeps coming up and you want to document it.
+  - You want to refresh an existing entry with newer reporting.
+  - A new driver column was added and you want its causal context.
+
+HOW TO USE
+  1. Open a normal Claude.ai chat (free — no API needed).
+  2. Paste everything between the >>> START and <<< END markers below.
+  3. Fill in the three bracketed inputs at the top.
+  4. Claude returns YAML blocks. Paste them into data/event_context.yaml
+     under the correct section ('events:' or 'driver_context:').
+  5. Commit + push. The dashboard and the HTML report pick it up on next run.
+
+NOTE ON ACCURACY
+  This content is shared with leadership. Every causal claim should be
+  traceable to a public source. If Claude is unsure of a number, it should
+  leave it out rather than guess. Keep the `as_of` field honest — it is the
+  snapshot date shown in the dashboard and report.
+
+>>> START — paste from here >>>
+
+You are a commodity-market analyst helping maintain a steel-price dashboard.
+I need curated context for the HRC Event Deep-Dive feature, as YAML.
+
+INPUTS (I fill these in):
+  EVENT_NAME:  [e.g. "China Stimulus Recovery Attempt"]
+  EVENT_DATE:  [e.g. "2024-02-01"]
+  DRIVERS:     [the contributing drivers for this event, e.g.
+               "Iron Ore 62%Fe (China CFR), HCC (Aus FOB), Crude Oil, BDI"]
+
+TASK:
+Produce two things.
+
+(A) ONE `events:` block for the event itself, with this exact structure:
+
+  - match_date: "EVENT_DATE"
+    title: "short human title"
+    as_of: "YYYY-MM"          # the month you are researching this
+    confidence: high|medium|low
+    what_changed:
+      - "plain factual bullet — which variables moved and roughly how much"
+      - "..."
+    why: >
+      The causal narrative — the actual real-world reason HRC moved. Multi-
+      sentence. Factual, sourced-in-spirit, no hype.
+    country_breakdown:
+      china: "how China was affected and why"
+      india: "how India was affected and why"
+      us: "how the US was affected and why"
+    watch_next:
+      - "what an analyst should monitor for a repeat of this setup"
+    sources:
+      - title: "publication / headline"
+        url: "https://..."
+    confidence: high|medium|low
+
+(B) ONE `driver_context:` block for EACH driver in DRIVERS, structure:
+
+  - driver: "exact driver column name"
+    from: "YYYY-MM-DD"        # window start — a few months before EVENT_DATE
+    to: "YYYY-MM-DD"          # window end — a few months after EVENT_DATE
+    headline: >
+      one-line summary of what the driver did in this window
+    why: >
+      Why did THIS DRIVER itself move? Trace it one layer down. If iron ore
+      moved, was it Chinese steel-output policy? A supply disruption? If
+      coking coal moved, was it Australian weather, a Russian supply shock?
+      Be specific about the mechanism.
+    country: >
+      Which country or region did the TRIGGER originate in? State it plainly
+      (e.g. "China — output caps and Tangshan pollution curbs"; "Australia
+      and Russia — weather plus the invasion").
+    sources:
+      - title: "publication / headline"
+        url: "https://..."
+
+RULES:
+  - Only include claims you can tie to public reporting. Prefer Reuters,
+    Bloomberg, official agencies (EIA, IEA, government departments),
+    established trade press.
+  - If a magnitude is uncertain, describe direction qualitatively instead of
+    inventing a number.
+  - Keep `why` factual and concise — a few sentences, not an essay.
+  - Output ONLY valid YAML I can paste directly. No commentary around it.
+  - Match the `driver` field to the EXACT column name I gave in DRIVERS.
+
+<<< END — paste to here <<<
+
+================================================================================
+TIP: If you only need to document the DRIVERS for an event that already has an
+events: block, just ask for part (B). If you only need the event narrative,
+ask for part (A).
+================================================================================

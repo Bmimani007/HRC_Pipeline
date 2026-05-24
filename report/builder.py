@@ -378,27 +378,6 @@ def chart_garch_volatility(garch_result, region_name):
     return fig
 
 
-def chart_regimes(regime_result, target_series):
-    colors_map = [COLORS["danger"], COLORS["muted"], COLORS["accent2"]]
-    if regime_result.n_regimes > 3:
-        colors_map = CHART_PALETTE[:regime_result.n_regimes]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=target_series.index, y=target_series.values, mode="lines",
-        line=dict(color=COLORS["ink"], width=1.5), name="Price",
-    ))
-    for r in range(regime_result.n_regimes):
-        mask = regime_result.labels == r
-        fig.add_trace(go.Scatter(
-            x=target_series.index[mask], y=target_series.values[mask],
-            mode="markers", name=f"Regime {r}",
-            marker=dict(color=colors_map[r], size=8, opacity=0.7),
-        ))
-    fig.update_layout(title=dict(text="Regime Classification (K-Means)",
-                                  font=dict(size=14)),
-                      yaxis_title="Price")
-    return fig
-
 
 def chart_attribution(attribution_result):
     rb = attribution_result.rolling_betas
@@ -1611,26 +1590,13 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
             html_parts.append(models_section)
 
         # ----- 6. Regimes -----
-        regimes = region_results.get("regimes")
-        if regimes and not isinstance(regimes, dict):
-            # We need the target series — reconstruct from spread.decomposition['HRC']
-            target_ser = (spread.decomposition["HRC"] if spread and not isinstance(spread, dict)
-                          else None)
-            if target_ser is not None:
-                reg_section = f"""
-<section>
-  <h2>Regime Classification — {region_name.title()}</h2>
-  <div class="subtitle">{regimes.n_regimes} regimes identified via K-means.
-    Currently in <b>regime {regimes.current_regime}</b>.</div>
-  <div class="chart-container">{_embed_chart(chart_regimes(regimes, target_ser))}</div>
-  <h3>Regime statistics</h3>
-  {_df_to_html(regimes.regime_stats)}
-  <h3>Regime mean values</h3>
-  {_df_to_html(regimes.regime_means.reset_index())}
-</section>"""
-                html_parts.append(reg_section)
+        # The standalone K-means regime section has been retired. Regime
+        # classification now lives entirely in the Cyclicity section below,
+        # which uses the shared behavioural GMM engine (driver-aware). This
+        # removes the old duplicate that used a different, price-only method
+        # and could disagree with the dashboard.
 
-        # ----- 6b. CYCLICITY (NEW) -----
+        # ----- 6b. CYCLICITY -----
         cyc = region_results.get("cyclicity")
         if cyc and not isinstance(cyc, dict):
             target_ser = (spread.decomposition["HRC"] if spread and not isinstance(spread, dict)
@@ -1724,32 +1690,154 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
 </section>"""
             html_parts.append(attr_section)
 
-        # ----- 8. Events -----
-        events = region_results.get("events")
-        if events and not isinstance(events, dict) and len(events.episodes) > 0:
-            events_html = ""
-            for ep in events.episodes:
-                ep_html = f'<h3>{ep["name"]} ({ep["event_date"]})</h3>'
-                for w_name, w_data in ep["windows"].items():
-                    rows = []
-                    for var, stats in w_data.items():
-                        rows.append({
-                            "Variable": var,
-                            f"Pre-{w_name} avg": stats["pre_avg"],
-                            f"Post-{w_name} avg": stats["post_avg"],
-                            "% Change": stats["pct_change"],
-                        })
-                    df = pd.DataFrame(rows)
-                    df = df.sort_values("% Change", key=lambda s: s.abs(), ascending=False)
-                    ep_html += f'<h4>±{w_name} window</h4>{_df_to_html(df)}'
-                events_html += ep_html
-            events_section = f"""
+        # ----- 8. Event Deep-Dive -----
+        # Phase 4 content rendered statically: curated narrative context,
+        # driver-level causal tracing, cross-region comparison and the
+        # recurrence base rate. Uses the same engine as the dashboard tab so
+        # the report and dashboard tell one story.
+        edd_list = region_results.get("event_deep_dive")
+        if edd_list and not isinstance(edd_list, dict) and len(edd_list) > 0:
+            edd_html = ""
+            for edd in edd_list:
+                ev = edd.event
+                cur = edd.curated
+
+                # Headline + narrative
+                move_txt = (f"{edd.headline_move_pct:+.1f}%"
+                            if edd.headline_move_pct == edd.headline_move_pct
+                            else "n/a")
+                block = (f'<h3>{ev.label} '
+                         f'<span style="color:#5C6B7F;font-weight:400">'
+                         f'({ev.date.strftime("%b %Y")} · HRC move '
+                         f'{move_txt} over ±{edd.primary_window_m}m)</span></h3>')
+
+                # Curated context
+                if cur.matched:
+                    if cur.what_changed:
+                        block += "<p><b>What changed:</b></p><ul>"
+                        block += "".join(f"<li>{b}</li>" for b in cur.what_changed)
+                        block += "</ul>"
+                    if cur.why:
+                        block += f"<p><b>Why it changed:</b> {cur.why}</p>"
+                    if cur.country_breakdown:
+                        block += "<p><b>Country breakdown:</b></p><ul>"
+                        block += "".join(
+                            f"<li><b>{c.upper()}</b> — {t}</li>"
+                            for c, t in cur.country_breakdown.items())
+                        block += "</ul>"
+                else:
+                    block += ('<p><i>No curated event write-up — data panels '
+                              'only.</i></p>')
+
+                # Driver-level causal tracing
+                if cur.driver_stories:
+                    block += "<p><b>Tracing the drivers:</b></p>"
+                    for ds in cur.driver_stories:
+                        block += (f'<p style="margin-left:14px">'
+                                  f'<b>{ds.driver}</b>')
+                        if ds.headline:
+                            block += f' — {ds.headline}'
+                        block += '</p>'
+                        if ds.why:
+                            block += (f'<p style="margin-left:14px;'
+                                      f'color:#2D3748">{ds.why}</p>')
+                        if ds.country:
+                            block += (f'<p style="margin-left:14px">'
+                                      f'<b>Where the trigger sat:</b> '
+                                      f'{ds.country}</p>')
+
+                # Decomposition table
+                if edd.decomposition_available and edd.contributions:
+                    drows = [{
+                        "Driver": c.driver,
+                        "Contribution %": round(c.contribution_pct, 1)
+                        if c.contribution_pct == c.contribution_pct else None,
+                        "Beta (window)": round(c.beta_in_window, 3)
+                        if c.beta_in_window == c.beta_in_window else None,
+                        "Driver move %": round(c.driver_change_pct, 1)
+                        if c.driver_change_pct == c.driver_change_pct else None,
+                    } for c in edd.contributions]
+                    block += "<h4>Driver decomposition (scale-aware |β·σ|)</h4>"
+                    block += _df_to_html(pd.DataFrame(drows))
+
+                # Cross-region
+                cross_ok = [c for c in edd.cross_region if c.available]
+                if cross_ok:
+                    crows = [{
+                        "Region": c.region.upper(),
+                        "HRC move %": round(c.pct_change, 1)
+                        if c.pct_change == c.pct_change else None,
+                        "Currency": c.currency,
+                        "Regime at event": c.regime_label or "—",
+                    } for c in cross_ok]
+                    block += "<h4>Cross-region — where it changed</h4>"
+                    block += _df_to_html(pd.DataFrame(crows))
+
+                # Recurrence
+                rec = edd.recurrence
+                if rec is not None and rec.n_events > 0:
+                    rrows = [{
+                        "Horizon": f"{h}m",
+                        "Avg forward move %": round(rec.avg_move_pct.get(h, float("nan")), 1)
+                        if rec.avg_move_pct.get(h) == rec.avg_move_pct.get(h) else None,
+                        "Hit rate %": round(rec.hit_rate.get(h, float("nan")) * 100, 0)
+                        if rec.hit_rate.get(h) == rec.hit_rate.get(h) else None,
+                    } for h in rec.horizons]
+                    block += (f"<h4>Recurrence — base rate across "
+                              f"{rec.n_events} detected {rec.kind}s</h4>")
+                    block += _df_to_html(pd.DataFrame(rrows))
+                    if not rec.sufficient:
+                        block += f'<p><i>{rec.note}</i></p>'
+
+                # Sources
+                if cur.matched and cur.sources:
+                    src_links = "; ".join(
+                        (f'<a href="{s["url"]}">{s["title"]}</a>'
+                         if s.get("url") else s["title"])
+                        for s in cur.sources)
+                    block += (f'<p style="font-size:0.8rem;color:#5C6B7F">'
+                              f'<b>Sources:</b> {src_links}</p>')
+
+                edd_html += block + "<hr/>"
+
+            edd_section = f"""
+<section>
+  <h2>Event Deep-Dive — {region_name.title()}</h2>
+  <div class="subtitle">Anatomy of each named turning point: what moved, the
+    curated narrative of why, driver-level causal tracing, cross-region
+    comparison and the empirical recurrence base rate. Matches the dashboard's
+    Event Deep-Dive tab.</div>
+  {edd_html}
+</section>"""
+            html_parts.append(edd_section)
+        else:
+            # Fall back to the legacy thin event-window table if the deep-dive
+            # step did not run (e.g. older results.json).
+            events = region_results.get("events")
+            if events and not isinstance(events, dict) and len(events.episodes) > 0:
+                events_html = ""
+                for ep in events.episodes:
+                    ep_html = f'<h3>{ep["name"]} ({ep["event_date"]})</h3>'
+                    for w_name, w_data in ep["windows"].items():
+                        rows = []
+                        for var, stats in w_data.items():
+                            rows.append({
+                                "Variable": var,
+                                f"Pre-{w_name} avg": stats["pre_avg"],
+                                f"Post-{w_name} avg": stats["post_avg"],
+                                "% Change": stats["pct_change"],
+                            })
+                        df = pd.DataFrame(rows)
+                        df = df.sort_values("% Change", key=lambda s: s.abs(),
+                                            ascending=False)
+                        ep_html += f'<h4>±{w_name} window</h4>{_df_to_html(df)}'
+                    events_html += ep_html
+                html_parts.append(f"""
 <section>
   <h2>Event Window Analysis — {region_name.title()}</h2>
   <div class="subtitle">How target + drivers behaved before and after key episodes.</div>
   {events_html}
-</section>"""
-            html_parts.append(events_section)
+</section>""")
 
         # ----- 9. India Liquidity Monitor (India only) -----
         # Renders the full Liquidity tab from the dashboard as a static section.
