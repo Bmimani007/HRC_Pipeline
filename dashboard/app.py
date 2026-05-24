@@ -200,6 +200,7 @@ def cached_event_deep_dive(_region_data, _dataset, cache_key: str, n_regimes: in
     inputs (all regions' price + cyclicity) so the 'where' panel works."""
     from pipeline.event_deep_dive import (analyse_event_deep_dive,
                                           load_event_context)
+    from pipeline.covid_filter import covid_window_from_config
     cyc = cached_cyclicity(_region_data, cache_key, n_regimes, file_mtime)
     episodes = yaml.safe_load(episodes_yaml) or []
     cands = cached_event_candidates(_region_data, cache_key, n_regimes,
@@ -223,7 +224,8 @@ def cached_event_deep_dive(_region_data, _dataset, cache_key: str, n_regimes: in
                                     region=_region_data.name,
                                     currency=_region_data.currency,
                                     all_regions=all_regions,
-                                    context=load_event_context())
+                                    context=load_event_context(),
+                                    covid=covid_window_from_config(config))
 
 
 @st.cache_data(show_spinner="Loading macro calendar...")
@@ -596,6 +598,15 @@ if not data_file.exists():
     st.stop()
 
 file_mtime = data_file.stat().st_mtime
+
+
+@st.cache_data(show_spinner=False)
+def _covid_window():
+    """The configured COVID exclusion window, or None if not set.
+    Shared by the Regimes, Cyclicity and Event Deep-Dive tabs."""
+    from pipeline.covid_filter import covid_window_from_config
+    return covid_window_from_config(config)
+
 
 # Load data
 try:
@@ -1579,10 +1590,39 @@ with tab_regimes:
                     x=idx, y=target.reindex(idx).values, mode="markers",
                     name=p.label,
                     marker=dict(size=8, opacity=0.8, color=regime_color(p.label))))
+            # COVID period shaded band — always shown, flags the abnormal stretch.
+            _covid = _covid_window()
+            if _covid is not None:
+                fig.add_vrect(x0=_covid.start, x1=_covid.end,
+                              fillcolor=COLORS["muted"], opacity=0.13,
+                              line_width=0,
+                              annotation_text="COVID period",
+                              annotation_position="top left",
+                              annotation_font_size=10)
             fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
                               yaxis_title=f"{currency}/t")
             style_axes(fig)
             st.plotly_chart(fig, use_container_width=True)
+
+            # ----- Regime stats: all-history vs normal-times -----
+            if _covid is not None:
+                st.markdown("##### Regime statistics — normal-times comparison")
+                st.caption(
+                    f"The COVID period ({_covid.label}) is the most abnormal "
+                    f"stretch in the history. The engine keeps it (it is why a "
+                    f"'Disrupted' regime exists), but it can distort the "
+                    f"descriptive stats. The table compares each regime's key "
+                    f"numbers on the full history against the normal-times "
+                    f"basis with COVID months excluded.")
+                from pipeline.covid_filter import regime_stats_comparison
+                cmp_df = regime_stats_comparison(regimes, filt_y, _covid)
+                st.dataframe(cmp_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    "Where the all-history and ex-COVID columns diverge sharply "
+                    "— often the 'Disrupted' and 'sharp downtrend' regimes — the "
+                    "regime's headline character leans heavily on COVID. The "
+                    "ex-COVID column is the better guide for normal-times "
+                    "expectations.")
 
             with st.expander("📝 Interpretation", expanded=False):
                 st.markdown(
@@ -1651,6 +1691,13 @@ with tab_cyclicity:
         fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=440,
                            yaxis_title=f"{currency}/t",
                            legend=dict(orientation="h", y=-0.15))
+        _covid_cyc = _covid_window()
+        if _covid_cyc is not None:
+            fig.add_vrect(x0=_covid_cyc.start, x1=_covid_cyc.end,
+                          fillcolor=COLORS["muted"], opacity=0.13, line_width=0,
+                          annotation_text="COVID period",
+                          annotation_position="top left",
+                          annotation_font_size=10)
         style_axes(fig)
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1672,6 +1719,18 @@ with tab_cyclicity:
                 "GARCH Persist": f"{gp:.3f}" if gp is not None else "—",
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # Normal-times comparison — same COVID-exclusion view as the Regimes tab
+        if _covid_cyc is not None:
+            st.markdown("###### Normal-times comparison (COVID period excluded)")
+            st.caption(
+                f"How each regime's stats change when the COVID window "
+                f"({_covid_cyc.label}) is excluded from the count. The engine "
+                f"still trains on the full history — this only re-counts the "
+                f"displayed statistics.")
+            from pipeline.covid_filter import regime_stats_comparison
+            cyc_cmp = regime_stats_comparison(cyc, region.y, _covid_cyc)
+            st.dataframe(cyc_cmp, use_container_width=True, hide_index=True)
 
         # Peaks & troughs chart
         st.subheader("Peak/trough detection")
@@ -2135,15 +2194,51 @@ with tab_event:
 
         # ===== PANEL 4: recurrence =====
         st.markdown("#### 4 · How turns like this usually resolve")
-        rec = edd.recurrence
+
+        # COVID exclusion toggle — off by default so the panel is unchanged
+        # for anyone not looking for it.
+        rec_ex = edd.recurrence_excl_covid
+        exclude_covid_rec = False
+        if rec_ex is not None:
+            exclude_covid_rec = st.checkbox(
+                "Exclude COVID period from this base rate",
+                value=False, key="event_recur_excovid",
+                help="COVID-era turning points are unrepeatable disruptions. "
+                     "Toggling this recomputes the base rate on normal-times "
+                     "turns only — the engine still keeps COVID in its "
+                     "training history, this only changes what is counted "
+                     "here.")
+        rec = rec_ex if (exclude_covid_rec and rec_ex is not None) else edd.recurrence
+
         if rec is not None and rec.n_events > 0:
+            basis = ("normal-times (COVID-era turns excluded)"
+                     if exclude_covid_rec else "all-history")
             st.caption(
-                f"Empirical base rate across all {rec.n_events} detected "
+                f"Empirical base rate ({basis}) across {rec.n_events} detected "
                 f"{rec.kind}s in {region_pick.title()}'s history. For each one we "
                 f"measure the forward % move and whether it resolved the "
                 f"'expected' way (price falls after a peak, rises after a trough).")
             if not rec.sufficient:
                 st.warning(rec.note)
+            elif exclude_covid_rec and rec.note:
+                st.info(rec.note)
+
+            # When the toggle is OFF but an ex-COVID result exists, show a
+            # one-line comparison so the analyst sees the COVID sensitivity
+            # without having to flip back and forth.
+            if (not exclude_covid_rec and rec_ex is not None
+                    and rec_ex.n_events > 0):
+                _mid = rec.horizons[len(rec.horizons) // 2]
+                _all_hit = rec.hit_rate.get(_mid)
+                _ex_hit = rec_ex.hit_rate.get(_mid)
+                if (_all_hit == _all_hit and _ex_hit == _ex_hit):
+                    _delta = (_ex_hit - _all_hit) * 100
+                    st.caption(
+                        f"↳ COVID sensitivity: at the {_mid}-month horizon the "
+                        f"hit rate is {_all_hit*100:.0f}% all-history vs "
+                        f"{_ex_hit*100:.0f}% ex-COVID "
+                        f"({_delta:+.0f}pp). Toggle above to switch the panel "
+                        f"to the normal-times basis.")
 
             rc1, rc2 = st.columns(2)
             with rc1:
@@ -2183,7 +2278,9 @@ with tab_event:
                 "kind have been a genuine signal in this region.")
         else:
             st.info("Not enough detected turning points to build a recurrence "
-                    "base rate for this region.")
+                    "base rate for this region"
+                    + (" on the normal-times basis." if exclude_covid_rec
+                       else "."))
 
         # ===== PANEL 5: live flag =====
         st.markdown("#### 5 · Does today rhyme with this event?")

@@ -127,6 +127,24 @@ refresh it, use `MASTER_PROMPT_EVENT_CONTEXT.txt` (the same paste-into-Claude
 workflow as the macro calendar). If an event has no curated entry, the tab
 still shows all the data-driven panels and simply says so.
 
+### COVID exclusion — normal-times statistics
+
+The COVID era is the most abnormal stretch in the HRC history, and it can
+distort the regime statistics and recurrence base rates. The Regimes,
+Cyclicity and Event Deep-Dive tabs therefore offer a **normal-times view** that
+re-counts the statistics with the COVID window excluded.
+
+Important: this does **not** delete data. The regime engine always trains on
+the full history — it keeps its "Disrupted / High-Vol" regime and stays ready
+for future shocks. The exclusion only changes which months are *counted* in
+the displayed statistics, so you can compare normal-times numbers against the
+all-history numbers side by side.
+
+The window is defined in `config.yaml` under `analysis.covid_window`
+(`start`, `end`) — edit those dates freely, no code change needed. The default
+is Feb 2020 – Dec 2021. The COVID period is also shaded on the regime price
+charts so it is flagged even in the default view.
+
 ---
 
 ## When something doesn't work
@@ -185,6 +203,7 @@ HRC_Pipeline/
 │   ├── attribution.py
 │   ├── events.py
 │   ├── event_deep_dive.py   ← Event Deep-Dive: decomposition + tracing + recurrence
+│   ├── covid_filter.py      ← COVID-exclusion filter for normal-times stats
 │   ├── candlestick.py       ← synthetic monthly candles + Elliott overlay
 │   ├── liquidity.py
 │   ├── macro_calendar.py

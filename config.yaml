@@ -163,6 +163,19 @@ analysis:
     peak_prominence_pct: 5.0         # peak detection sensitivity (% of std)
     min_distance_months: 4           # minimum spacing between detected peaks/troughs
 
+  # COVID exclusion window — used by the "Exclude COVID period" toggle on the
+  # Regimes, Cyclicity and Event Deep-Dive tabs. IMPORTANT: this does NOT cut
+  # the data. The regime engine always trains on the full history (so it keeps
+  # its "Disrupted / High-Vol" regime and stays ready for future shocks). This
+  # window only controls which months are COUNTED when the toggle is on, so you
+  # can compare normal-times statistics against the all-history numbers.
+  # Note: the chosen end date (2021-12-31) means this window also brackets the
+  # Nov 2021 supercycle peak — so the ex-COVID view excludes that peak too.
+  # Edit these dates freely; no code change needed.
+  covid_window:
+    start: "2020-02-01"
+    end: "2021-12-31"
+
 
 # ---------- OUTPUT ----------
 output:

@@ -1343,6 +1343,9 @@ def _render_liquidity_section(region_name: str, region_results: dict) -> str:
 def build_report(results: Dict[str, Any], output_path: str) -> str:
     """Build the full HTML report and write it to disk."""
     html_parts = []
+    # The orchestrator stores the run config here; used e.g. for the COVID
+    # exclusion window in the cyclicity section.
+    config = results.get("config", {}) or {}
 
     # Header / cover
     n_regions = len(results["regions"])
@@ -1621,6 +1624,27 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
                 })
             reg_stats_df = pd.DataFrame(reg_stats_rows)
 
+            # Normal-times (ex-COVID) regime stats comparison — same view as
+            # the dashboard's Regimes/Cyclicity tabs. Built only when a COVID
+            # window is configured and a price series is available.
+            covid_cmp_html = ""
+            try:
+                from pipeline.covid_filter import (covid_window_from_config,
+                                                   regime_stats_comparison)
+                _cov = covid_window_from_config(config)
+                if _cov is not None and target_ser is not None:
+                    _cmp = regime_stats_comparison(cyc, target_ser, _cov)
+                    covid_cmp_html = (
+                        f'<h3>Regime Statistics — Normal-Times Comparison</h3>'
+                        f'<div class="subtitle">How each regime\'s key numbers '
+                        f'change when the COVID window ({_cov.label}) is excluded '
+                        f'from the count. The engine still trains on the full '
+                        f'history — this only re-counts the displayed '
+                        f'statistics.</div>'
+                        f'{_df_to_html(_cmp)}')
+            except Exception:
+                covid_cmp_html = ""
+
             # Cycle stats summary table
             cs = cyc.cycle_stats
             cycle_summary_df = pd.DataFrame([{
@@ -1654,6 +1678,8 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
 
   <h3>Per-Regime Statistics</h3>
   {_df_to_html(reg_stats_df)}
+
+  {covid_cmp_html}
 
   <h3>Peak/Trough Cycle Detection</h3>
   <div class="chart-container">{_embed_chart(chart_peaks_troughs(cyc, target_ser)) if target_ser is not None else '<div class="empty">N/A</div>'}</div>
@@ -1773,19 +1799,42 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
                     block += "<h4>Cross-region — where it changed</h4>"
                     block += _df_to_html(pd.DataFrame(crows))
 
-                # Recurrence
+                # Recurrence — all-history, with a normal-times (ex-COVID)
+                # column when the COVID-excluded base rate is available.
                 rec = edd.recurrence
+                rec_ex = getattr(edd, "recurrence_excl_covid", None)
                 if rec is not None and rec.n_events > 0:
-                    rrows = [{
-                        "Horizon": f"{h}m",
-                        "Avg forward move %": round(rec.avg_move_pct.get(h, float("nan")), 1)
-                        if rec.avg_move_pct.get(h) == rec.avg_move_pct.get(h) else None,
-                        "Hit rate %": round(rec.hit_rate.get(h, float("nan")) * 100, 0)
-                        if rec.hit_rate.get(h) == rec.hit_rate.get(h) else None,
-                    } for h in rec.horizons]
+                    has_ex = (rec_ex is not None and rec_ex.n_events > 0)
+                    rrows = []
+                    for h in rec.horizons:
+                        row = {
+                            "Horizon": f"{h}m",
+                            "Avg move % (all)": round(rec.avg_move_pct.get(h, float("nan")), 1)
+                            if rec.avg_move_pct.get(h) == rec.avg_move_pct.get(h) else None,
+                            "Hit rate % (all)": round(rec.hit_rate.get(h, float("nan")) * 100, 0)
+                            if rec.hit_rate.get(h) == rec.hit_rate.get(h) else None,
+                        }
+                        if has_ex:
+                            row["Avg move % (ex-COVID)"] = (
+                                round(rec_ex.avg_move_pct.get(h, float("nan")), 1)
+                                if rec_ex.avg_move_pct.get(h) == rec_ex.avg_move_pct.get(h)
+                                else None)
+                            row["Hit rate % (ex-COVID)"] = (
+                                round(rec_ex.hit_rate.get(h, float("nan")) * 100, 0)
+                                if rec_ex.hit_rate.get(h) == rec_ex.hit_rate.get(h)
+                                else None)
+                        rrows.append(row)
                     block += (f"<h4>Recurrence — base rate across "
                               f"{rec.n_events} detected {rec.kind}s</h4>")
                     block += _df_to_html(pd.DataFrame(rrows))
+                    if has_ex:
+                        block += ('<p style="font-size:0.8rem;color:#5C6B7F">'
+                                  'The ex-COVID columns recompute the base rate '
+                                  'on normal-times turning points only (COVID-era '
+                                  'turns excluded). The regime engine still trains '
+                                  'on the full history.</p>')
+                        if rec_ex.note:
+                            block += f'<p><i>{rec_ex.note}</i></p>'
                     if not rec.sufficient:
                         block += f'<p><i>{rec.note}</i></p>'
 

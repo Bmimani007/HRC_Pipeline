@@ -172,8 +172,10 @@ def run_pipeline(config: dict) -> Dict[str, Any]:
     # curated-context + driver-tracing content the dashboard shows.
     print("\n→ Event Deep-Dive analysis")
     try:
+        from .covid_filter import covid_window_from_config
         _ctx = load_event_context()
         _episodes = config["analysis"]["events"]["episodes"]
+        _covid = covid_window_from_config(config)
         # Assemble cross-region inputs (price + cyclicity per region)
         _all_regions = {}
         for rname, rres in results["regions"].items():
@@ -202,7 +204,8 @@ def run_pipeline(config: dict) -> Dict[str, Any]:
                     edd = analyse_event_deep_dive(
                         rdata.y, _drv, rcyc, cand,
                         region=rname, currency=rdata.currency,
-                        all_regions=_all_regions, context=_ctx)
+                        all_regions=_all_regions, context=_ctx,
+                        covid=_covid)
                     deep.append(edd)
                 except Exception as e:
                     print(f"   ✗ {cand.label}: {type(e).__name__}: {e}")

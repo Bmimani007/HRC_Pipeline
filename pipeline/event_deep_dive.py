@@ -143,6 +143,9 @@ class EventDeepDiveResult:
     curated: CuratedContext = field(default_factory=lambda: CuratedContext(False))
     # Cross-region 'where did it change' panel
     cross_region: List[CrossRegionMove] = field(default_factory=list)
+    # normal-times recurrence base rate (COVID-era turns excluded); None if
+    # no COVID window is configured
+    recurrence_excl_covid: Optional[RecurrenceStats] = None
 
     primary_window_m: int = 6
 
@@ -327,7 +330,8 @@ def _forward_move(target: pd.Series, at: pd.Timestamp, h: int) -> Optional[float
 
 
 def _recurrence(target: pd.Series, cyc_result, kind: str,
-                horizons: List[int] = [3, 6, 12]) -> RecurrenceStats:
+                horizons: List[int] = [3, 6, 12],
+                covid=None, exclude_covid: bool = False) -> RecurrenceStats:
     """
     Empirical base rate for turning points of `kind` ('peak' or 'trough').
 
@@ -339,6 +343,11 @@ def _recurrence(target: pd.Series, cyc_result, kind: str,
     A turn needs at least 4 comparable historical instances to be considered
     a trustworthy base rate; below that we still show the numbers but flag
     them 'insufficient'.
+
+    If `exclude_covid` is True and a `covid` window is supplied, turning
+    points inside that window are dropped first — so the base rate reflects
+    normal-times turns only. Excluding turns shrinks the sample, so the
+    'insufficient' flag does real work here.
     """
     if cyc_result is None:
         return RecurrenceStats(kind, 0, horizons, {}, {}, False,
@@ -348,6 +357,22 @@ def _recurrence(target: pd.Series, cyc_result, kind: str,
     if series is None or len(series) == 0:
         return RecurrenceStats(kind, 0, horizons, {}, {}, False,
                                f"No detected {kind}s to build a base rate from.")
+
+    extra_note = ""
+    if exclude_covid and covid is not None:
+        from .covid_filter import filter_turning_points
+        before = len(series)
+        series = filter_turning_points(series, covid, True)
+        dropped = before - len(series)
+        if dropped > 0:
+            extra_note = (f" Excludes {dropped} COVID-era {kind}"
+                          f"{'s' if dropped != 1 else ''} "
+                          f"({covid.label}).")
+        if len(series) == 0:
+            return RecurrenceStats(kind, 0, horizons, {}, {}, False,
+                                   f"All detected {kind}s fall inside the "
+                                   f"COVID window — no normal-times base "
+                                   f"rate available.")
 
     avg_move, hit = {}, {}
     n_used = 0
@@ -374,7 +399,7 @@ def _recurrence(target: pd.Series, cyc_result, kind: str,
             f"Only {n_used} comparable {kind}s in the sample — treat the base "
             f"rate as indicative, not statistically firm.")
     return RecurrenceStats(kind, n_used, horizons, avg_move, hit,
-                           sufficient, note)
+                           sufficient, (note + extra_note).strip())
 
 
 # ---------- Panel 4: live "does today rhyme" flag ----------
@@ -653,7 +678,8 @@ def analyse_event_deep_dive(target: pd.Series,
                             windows_months: List[int] = [3, 6],
                             attr_window: int = 24,
                             all_regions: Optional[Dict[str, dict]] = None,
-                            context: Optional[dict] = None
+                            context: Optional[dict] = None,
+                            covid=None
                             ) -> EventDeepDiveResult:
     """
     Run the full Event Deep-Dive for ONE chosen event.
@@ -711,6 +737,12 @@ def analyse_event_deep_dive(target: pd.Series,
     else:
         rec_kind = "peak" if (np.isfinite(headline) and headline < 0) else "trough"
     recurrence = _recurrence(target, cyc_result, rec_kind)
+    # Normal-times base rate — only computed when a COVID window is supplied.
+    recurrence_excl_covid = None
+    if covid is not None:
+        recurrence_excl_covid = _recurrence(
+            target, cyc_result, rec_kind,
+            covid=covid, exclude_covid=True)
 
     # ----- Panel 4: live flag -----
     event_regime = _regime_at(cyc_result, event.date)
@@ -745,6 +777,7 @@ def analyse_event_deep_dive(target: pd.Series,
         decomposition_available=decomp_ok,
         decomposition_note=decomp_note,
         recurrence=recurrence,
+        recurrence_excl_covid=recurrence_excl_covid,
         event_regime=event_regime,
         event_regime_label=event_regime_label,
         current_regime=current_regime,
