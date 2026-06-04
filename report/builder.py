@@ -1718,9 +1718,9 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
 
         # ----- 8. Event Deep-Dive -----
         # Phase 4 content rendered statically: curated narrative context,
-        # driver-level causal tracing, cross-region comparison and the
-        # recurrence base rate. Uses the same engine as the dashboard tab so
-        # the report and dashboard tell one story.
+        # driver-level causal tracing and cross-region comparison. Uses the
+        # same engine as the dashboard tab so the report and dashboard tell
+        # one story.
         edd_list = region_results.get("event_deep_dive")
         if edd_list and not isinstance(edd_list, dict) and len(edd_list) > 0:
             edd_html = ""
@@ -1799,45 +1799,6 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
                     block += "<h4>Cross-region — where it changed</h4>"
                     block += _df_to_html(pd.DataFrame(crows))
 
-                # Recurrence — all-history, with a normal-times (ex-COVID)
-                # column when the COVID-excluded base rate is available.
-                rec = edd.recurrence
-                rec_ex = getattr(edd, "recurrence_excl_covid", None)
-                if rec is not None and rec.n_events > 0:
-                    has_ex = (rec_ex is not None and rec_ex.n_events > 0)
-                    rrows = []
-                    for h in rec.horizons:
-                        row = {
-                            "Horizon": f"{h}m",
-                            "Avg move % (all)": round(rec.avg_move_pct.get(h, float("nan")), 1)
-                            if rec.avg_move_pct.get(h) == rec.avg_move_pct.get(h) else None,
-                            "Hit rate % (all)": round(rec.hit_rate.get(h, float("nan")) * 100, 0)
-                            if rec.hit_rate.get(h) == rec.hit_rate.get(h) else None,
-                        }
-                        if has_ex:
-                            row["Avg move % (ex-COVID)"] = (
-                                round(rec_ex.avg_move_pct.get(h, float("nan")), 1)
-                                if rec_ex.avg_move_pct.get(h) == rec_ex.avg_move_pct.get(h)
-                                else None)
-                            row["Hit rate % (ex-COVID)"] = (
-                                round(rec_ex.hit_rate.get(h, float("nan")) * 100, 0)
-                                if rec_ex.hit_rate.get(h) == rec_ex.hit_rate.get(h)
-                                else None)
-                        rrows.append(row)
-                    block += (f"<h4>Recurrence — base rate across "
-                              f"{rec.n_events} detected {rec.kind}s</h4>")
-                    block += _df_to_html(pd.DataFrame(rrows))
-                    if has_ex:
-                        block += ('<p style="font-size:0.8rem;color:#5C6B7F">'
-                                  'The ex-COVID columns recompute the base rate '
-                                  'on normal-times turning points only (COVID-era '
-                                  'turns excluded). The regime engine still trains '
-                                  'on the full history.</p>')
-                        if rec_ex.note:
-                            block += f'<p><i>{rec_ex.note}</i></p>'
-                    if not rec.sufficient:
-                        block += f'<p><i>{rec.note}</i></p>'
-
                 # Sources
                 if cur.matched and cur.sources:
                     src_links = "; ".join(
@@ -1853,8 +1814,8 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
 <section>
   <h2>Event Deep-Dive — {region_name.title()}</h2>
   <div class="subtitle">Anatomy of each named turning point: what moved, the
-    curated narrative of why, driver-level causal tracing, cross-region
-    comparison and the empirical recurrence base rate. Matches the dashboard's
+    curated narrative of why, driver-level causal tracing, and cross-region
+    comparison. Matches the dashboard's
     Event Deep-Dive tab.</div>
   {edd_html}
 </section>"""
@@ -1929,20 +1890,6 @@ def build_report(results: Dict[str, Any], output_path: str) -> str:
   <div class="chart-container">{_embed_chart(chart_cross_region(cross), height=560)}</div>
 </section>"""
         html_parts.append(cross_section)
-
-    # ----- Macro Calendar Section -----
-    cal = results.get("macro_calendar")
-    if cal and not isinstance(cal, dict) and len(cal.events) > 0:
-        cal_blocks = narrator.narrate_macro_calendar(cal)
-        cal_section = f"""
-<section>
-  <h2>Macro Calendar — Forward 45-Day Outlook</h2>
-  <div class="subtitle">HRC-relevant events from {cal.window_start} to {cal.window_end} ·
-    {len(cal.events)} events ({cal.n_high} HIGH, {cal.n_med} MED) · Generated {cal.today}</div>
-
-  {_render_prose(cal_blocks)}
-</section>"""
-        html_parts.append(cal_section)
 
     # Footer
     footer = f"""

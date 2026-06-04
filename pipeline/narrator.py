@@ -945,24 +945,6 @@ def narrate_event_deep_dive(result, currency: str = "USD") -> List:
         )
 
     # --- Panel 3: recurrence base rate ---
-    rec = result.recurrence
-    if rec is not None and rec.n_events > 0:
-        h_mid = rec.horizons[len(rec.horizons) // 2]
-        avg_mid = rec.avg_move_pct.get(h_mid)
-        hit_mid = rec.hit_rate.get(h_mid)
-        if avg_mid == avg_mid and hit_mid == hit_mid:
-            expected = "lower" if rec.kind == "peak" else "higher"
-            out.append(
-                f"<b>How turns like this usually resolve.</b> Across the "
-                f"{rec.n_events} detected {rec.kind}s in this region's history, "
-                f"HRC moved on average <b>{avg_mid:+.1f}%</b> in the "
-                f"{h_mid} months after the turn, and finished {expected} "
-                f"<b>{hit_mid*100:.0f}%</b> of the time. This is the empirical "
-                f"base rate — the event above should be read against it."
-            )
-        if not rec.sufficient and rec.note:
-            out.append(f"<i>{rec.note}</i>")
-
     # --- Cross-region: where did it change ---
     def _rg(name: str) -> str:
         return name.upper() if name.lower() == "us" else name.title()
@@ -1501,30 +1483,6 @@ def narrate_garch_dashboard(garch_result, currency: str = "USD",
         f"{regime_explanations.get(g.regime_label, '')}"
     )
     out.append(p2)
-
-    # Para 3: VaR/ES interpretation
-    if g.var_95 is not None and g.expected_shortfall_95 is not None:
-        es_var_ratio = g.expected_shortfall_95 / g.var_95 if g.var_95 > 0 else None
-        p3 = (
-            f"<b>Risk metrics (1-month forward):</b> Value-at-Risk at 95% "
-            f"confidence is <b>{fmt_money(g.var_95, currency)}</b> — there is a "
-            f"5% probability of losing more than this in the next month. "
-            f"Expected Shortfall at 95% (the average loss <i>conditional on</i> "
-            f"the 5% tail event occurring) is <b>{fmt_money(g.expected_shortfall_95, currency)}</b>. "
-        )
-        if es_var_ratio:
-            p3 += (
-                f"The ES/VaR ratio of {es_var_ratio:.2f} indicates "
-                f"{'thick tails — losses well beyond VaR are likely if the tail is hit' if es_var_ratio > 1.4 else 'standard tail behaviour under normal-distribution assumption'}."
-            )
-        out.append(p3)
-        p3b = (
-            f"At the 99% level: VaR <b>{fmt_money(g.var_99, currency)}</b>, "
-            f"Expected Shortfall <b>{fmt_money(g.expected_shortfall_99, currency)}</b>. "
-            f"The 99% level captures the tail-of-tail — events expected once "
-            f"every ~100 months (roughly twice per decade)."
-        )
-        out.append(p3b)
 
     # Key box
     msg = (

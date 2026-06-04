@@ -22,7 +22,7 @@ from .events import run_event_analysis
 from .cyclicity import analyse_cyclicity
 from .event_deep_dive import (build_event_candidates, analyse_event_deep_dive,
                               load_event_context)
-from .macro_calendar import analyse_macro_calendar
+from .macro_calendar import analyse_macro_calendar  # noqa: F401 (retained for dashboard/standalone use)
 from models.registry import build_models, list_available
 
 
@@ -226,18 +226,6 @@ def run_pipeline(config: dict) -> Dict[str, Any]:
     else:
         results["cross_region"] = {"available": False,
                                     "reason": "Need both regions for comparison"}
-
-    # Macro calendar (uses both regions; degrades to china-only if india missing)
-    print("\n→ Macro calendar analysis")
-    india_data = dataset.regions.get("india")
-    china_data = dataset.regions.get("china")
-    if china_data is not None:
-        results["macro_calendar"] = _step(
-            "macro events with historical analogues",
-            analyse_macro_calendar, china_data, india_data, config,
-        )
-    else:
-        results["macro_calendar"] = {"error": "China region required for macro calendar"}
 
     print(f"\n(ok) Pipeline complete in {time.time() - t_total:.1f}s")
     return results

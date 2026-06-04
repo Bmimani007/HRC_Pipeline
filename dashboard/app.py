@@ -167,19 +167,6 @@ def cached_cyclicity(_region_data, cache_key: str, n_regimes: int, file_mtime: f
                               n_regimes=n_regimes)
 
 
-@st.cache_data(show_spinner="Building candles...")
-def cached_candles(_region_data, cache_key: str, file_mtime: float):
-    """Synthetic monthly candles + swing detection + a mechanical Elliott
-    count. See pipeline/candlestick.py for the data-honesty caveats."""
-    from pipeline.candlestick import (build_monthly_candles, detect_swings,
-                                      label_elliott)
-    cr = build_monthly_candles(_region_data.y, region=_region_data.name,
-                                currency=_region_data.currency)
-    swings = detect_swings(_region_data.y)
-    elliott = label_elliott(swings)
-    return cr, swings, elliott
-
-
 @st.cache_data(show_spinner="Building event list...")
 def cached_event_candidates(_region_data, cache_key: str, n_regimes: int,
                              episodes_yaml: str, file_mtime: float):
@@ -226,19 +213,6 @@ def cached_event_deep_dive(_region_data, _dataset, cache_key: str, n_regimes: in
                                     all_regions=all_regions,
                                     context=load_event_context(),
                                     covid=covid_window_from_config(config))
-
-
-@st.cache_data(show_spinner="Loading macro calendar...")
-def cached_macro_calendar(_dataset, config_yaml: str, window_days: int,
-                            show_past: bool, past_days: int, file_mtime: float):
-    from pipeline.macro_calendar import analyse_macro_calendar
-    china = _dataset.regions.get("china")
-    india = _dataset.regions.get("india")
-    if china is None:
-        return None
-    return analyse_macro_calendar(china, india, yaml.safe_load(config_yaml),
-                                    window_days=window_days,
-                                    show_past=show_past, past_days=past_days)
 
 
 # ---------- FORECASTING caches ----------
@@ -1028,12 +1002,12 @@ _has_liquidity = bool(getattr(region, "liquidity_cols", []))
 # liquidity block configured in config.yaml (currently India only). This keeps
 # the tab strip uncluttered for regions where it wouldn't apply.
 if _has_liquidity:
-    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast, tab_macro, tab_liquidity = st.tabs([
-        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts", "Macro Calendar", "Liquidity"
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast, tab_liquidity = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts", "Liquidity"
     ])
 else:
-    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast, tab_macro = st.tabs([
-        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts", "Macro Calendar"
+    tab_overview, tab_spread, tab_diag, tab_lead_lag, tab_regimes, tab_cyclicity, tab_event, tab_attribution, tab_forecast = st.tabs([
+        "Overview", "Spread", "Diagnostics", "Lead/Lag", "Regimes", "Cyclicity", "Event Deep-Dive", "Attribution", "Forecasts"
     ])
     tab_liquidity = None # sentinel; tab body guards on this
 tab_glossary = None # glossary is sidebar-only; tab body guarded
@@ -1235,92 +1209,6 @@ with tab_overview:
                 fig.update_layout(**PLOT_BASE, margin=COMPACT_MARGIN, height=240, title=d)
                 style_axes(fig)
                 st.plotly_chart(fig, use_container_width=True)
-
-    # ===== CANDLESTICK VIEW (Phase 5) =====
-    st.markdown("---")
-    st.subheader("Candlestick view")
-    with st.expander("Monthly candles + optional Elliott-wave overlay",
-                     expanded=False):
-        # Honest data caveat — stated up front, before the chart.
-        st.warning(
-            "**Synthetic candles.** This pipeline's HRC data is **monthly and "
-            "close-only** — there is no intraday open/high/low. Each candle is "
-            "built as open = previous month's close, close = current close, so "
-            "it is a **pure body with no wicks**: it shows the size and "
-            "direction of each month's close-to-close move, nothing more. It is "
-            "an honest re-rendering of the same price line shown above — not a "
-            "claim about intra-month trading ranges.")
-
-        try:
-            cr, swings, elliott = cached_candles(region, f"{region_pick}_full",
-                                                  file_mtime)
-        except Exception as e:
-            st.error(f"Candle build failed: {type(e).__name__}: {e}")
-            cr, swings, elliott = None, None, None
-
-        if cr is not None and len(cr.candles) > 0:
-            cdf = cr.candles
-            # date filter to the sidebar range for consistency with other charts
-            cdf = cdf.loc[(cdf.index >= pd.Timestamp(date_range[0])) &
-                          (cdf.index <= pd.Timestamp(date_range[1]))]
-
-            show_elliott = st.checkbox(
-                "Show Elliott-wave overlay (optional, not a forecast)",
-                value=False, key="elliott_toggle")
-
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=cdf.index,
-                open=cdf["open"], high=cdf["high"],
-                low=cdf["low"], close=cdf["close"],
-                increasing_line_color=COLORS["accent2"],
-                decreasing_line_color=COLORS["danger"],
-                name="Monthly candle",
-                whiskerwidth=0))
-
-            if show_elliott:
-                # Disclaimer FIRST — before the overlay is read.
-                st.info(f"⚠️ {elliott.disclaimer}")
-                if elliott.available and len(elliott.labels) > 0:
-                    el = elliott.labels
-                    # only plot wave points inside the visible window
-                    elv = el[(el["date"] >= cdf.index.min()) &
-                             (el["date"] <= cdf.index.max())]
-                    if len(elv) > 0:
-                        fig.add_trace(go.Scatter(
-                            x=elv["date"], y=elv["price"],
-                            mode="lines+markers+text",
-                            line=dict(color=COLORS["ink"], width=1.4,
-                                      dash="dot"),
-                            marker=dict(size=9, color=COLORS["warning"],
-                                        symbol="diamond"),
-                            text=elv["wave"], textposition="top center",
-                            textfont=dict(size=13, color=COLORS["ink"],
-                                          family="Inter"),
-                            name="Elliott count"))
-                        st.caption(elliott.note)
-                    else:
-                        st.caption("No Elliott swing points fall inside the "
-                                   "current date range — widen the date filter "
-                                   "in the sidebar.")
-                else:
-                    st.caption(elliott.note if elliott else
-                               "Elliott overlay unavailable.")
-
-            fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=460,
-                               yaxis_title=f"{currency}/t",
-                               xaxis_rangeslider_visible=False,
-                               legend=dict(orientation="h", y=-0.12))
-            style_axes(fig)
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.caption(
-                "Green = month closed up, red = month closed down. Because the "
-                "candles have no wicks, two adjacent candles always touch — the "
-                "open of each is the close of the last.")
-        else:
-            st.info("Not enough price history to build candles for this region.")
-
 
 # ===== SPREAD =====
 with tab_spread:
@@ -1851,10 +1739,8 @@ with tab_event:
             "The Cyclicity tab showed the *rhythm* — which states follow which. "
             "This tab opens up the sharp turns one at a time. Pick an event and "
             "the panels below answer: what moved, why it moved (drivers + the "
-            "narrative story), where it moved (China vs India vs US), how turns "
-            "like it usually resolve, and whether today rhymes with it. "
-            "(Forward-looking macro events live in the Macro Calendar tab — this "
-            "tab is strictly backward-looking.)"
+            "narrative story), where it moved (China vs India vs US), and whether "
+            "today rhymes with it. This tab is strictly backward-looking."
         )
 
         n_ev = st.slider("Number of GMM regimes", 2, 5, 4, key="event_nreg",
@@ -2191,99 +2077,8 @@ with tab_event:
         else:
             st.info("Cross-region comparison unavailable — the event date falls "
                     "outside the other regions' data ranges.")
-
-        # ===== PANEL 4: recurrence =====
-        st.markdown("#### 4 · How turns like this usually resolve")
-
-        # COVID exclusion toggle — off by default so the panel is unchanged
-        # for anyone not looking for it.
-        rec_ex = edd.recurrence_excl_covid
-        exclude_covid_rec = False
-        if rec_ex is not None:
-            exclude_covid_rec = st.checkbox(
-                "Exclude COVID period from this base rate",
-                value=False, key="event_recur_excovid",
-                help="COVID-era turning points are unrepeatable disruptions. "
-                     "Toggling this recomputes the base rate on normal-times "
-                     "turns only — the engine still keeps COVID in its "
-                     "training history, this only changes what is counted "
-                     "here.")
-        rec = rec_ex if (exclude_covid_rec and rec_ex is not None) else edd.recurrence
-
-        if rec is not None and rec.n_events > 0:
-            basis = ("normal-times (COVID-era turns excluded)"
-                     if exclude_covid_rec else "all-history")
-            st.caption(
-                f"Empirical base rate ({basis}) across {rec.n_events} detected "
-                f"{rec.kind}s in {region_pick.title()}'s history. For each one we "
-                f"measure the forward % move and whether it resolved the "
-                f"'expected' way (price falls after a peak, rises after a trough).")
-            if not rec.sufficient:
-                st.warning(rec.note)
-            elif exclude_covid_rec and rec.note:
-                st.info(rec.note)
-
-            # When the toggle is OFF but an ex-COVID result exists, show a
-            # one-line comparison so the analyst sees the COVID sensitivity
-            # without having to flip back and forth.
-            if (not exclude_covid_rec and rec_ex is not None
-                    and rec_ex.n_events > 0):
-                _mid = rec.horizons[len(rec.horizons) // 2]
-                _all_hit = rec.hit_rate.get(_mid)
-                _ex_hit = rec_ex.hit_rate.get(_mid)
-                if (_all_hit == _all_hit and _ex_hit == _ex_hit):
-                    _delta = (_ex_hit - _all_hit) * 100
-                    st.caption(
-                        f"↳ COVID sensitivity: at the {_mid}-month horizon the "
-                        f"hit rate is {_all_hit*100:.0f}% all-history vs "
-                        f"{_ex_hit*100:.0f}% ex-COVID "
-                        f"({_delta:+.0f}pp). Toggle above to switch the panel "
-                        f"to the normal-times basis.")
-
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                fig = go.Figure()
-                hs = rec.horizons
-                vals = [rec.avg_move_pct.get(h, float("nan")) for h in hs]
-                fig.add_trace(go.Bar(
-                    x=[f"{h}m" for h in hs], y=vals,
-                    marker=dict(color=[COLORS["danger"] if v < 0
-                                       else COLORS["accent2"] for v in vals]),
-                    text=[f"{v:+.1f}%" if pd.notna(v) else "—" for v in vals],
-                    textposition="outside"))
-                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=300,
-                                   yaxis_title="Avg forward move (%)",
-                                   title=f"Average move after a {rec.kind}")
-                style_axes(fig)
-                st.plotly_chart(fig, use_container_width=True)
-            with rc2:
-                fig = go.Figure()
-                hits = [rec.hit_rate.get(h, float("nan")) * 100 for h in hs]
-                fig.add_trace(go.Bar(
-                    x=[f"{h}m" for h in hs], y=hits,
-                    marker=dict(color=COLORS["accent"]),
-                    text=[f"{v:.0f}%" if pd.notna(v) else "—" for v in hits],
-                    textposition="outside"))
-                fig.add_hline(y=50, line=dict(color=COLORS["muted"], dash="dot"))
-                fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=300,
-                                   yaxis_title="Resolved as expected (%)",
-                                   yaxis=dict(range=[0, 105]),
-                                   title="Directional hit rate")
-                style_axes(fig)
-                st.plotly_chart(fig, use_container_width=True)
-            st.caption(
-                "The hit-rate bars show how often the move went the 'textbook' "
-                "direction. A bar near 50% means the turn carried little "
-                "directional information; well above 50% means turns of this "
-                "kind have been a genuine signal in this region.")
-        else:
-            st.info("Not enough detected turning points to build a recurrence "
-                    "base rate for this region"
-                    + (" on the normal-times basis." if exclude_covid_rec
-                       else "."))
-
-        # ===== PANEL 5: live flag =====
-        st.markdown("#### 5 · Does today rhyme with this event?")
+        # ===== PANEL 4: live flag =====
+        st.markdown("#### 4 · Does today rhyme with this event?")
         score = edd.rhyme_score
         if score >= 0.66:
             badge_c, verdict = COLORS["danger"], "STRONG RHYME"
@@ -3144,10 +2939,10 @@ with tab_forecast:
 
             # ===== SECTION C: GARCH Volatility + Risk =====
             st.markdown("---")
-            st.markdown("#### Section C · GARCH Volatility & Risk Metrics")
+            st.markdown("#### Section C · GARCH Volatility")
             st.caption(
-                "GARCH(1,1) model fitted on log-returns. Provides conditional volatility forecast, "
-                "fan chart on point forecast, VaR/Expected Shortfall, and current volatility regime classification."
+                "GARCH(1,1) model fitted on log-returns. Provides a conditional volatility forecast "
+                "and a fan chart on the point forecast."
             )
 
             g = cached_garch(region, region_pick, forecast_horizon, file_mtime)
@@ -3239,241 +3034,6 @@ with tab_forecast:
                     )
                 else:
                     st.warning("ARIMAX forecast required for fan chart but failed — try simpler ARIMAX parameters.")
-
-                # ----- View 2: Risk metrics -----
-                st.markdown("##### View 2 — Risk metrics (1-month forward)")
-                rm1, rm2, rm3, rm4 = st.columns(4)
-                rm1.metric("VaR 95%", f"{currency} {g.var_95:,.0f}/t",
-                             help="5% probability of losing MORE than this in 1 month.")
-                rm2.metric("VaR 99%", f"{currency} {g.var_99:,.0f}/t",
-                             help="1% probability of losing MORE than this in 1 month.")
-                rm3.metric("Expected Shortfall 95%", f"{currency} {g.expected_shortfall_95:,.0f}/t",
-                             help="Average loss IF the 5% tail event occurs.")
-                rm4.metric("Expected Shortfall 99%", f"{currency} {g.expected_shortfall_99:,.0f}/t",
-                             help="Average loss IF the 1% tail event occurs.")
-                st.caption(
-                    "VaR (Value-at-Risk) and ES (Expected Shortfall) are computed from the GARCH-forecast "
-                    "volatility under a normal distribution assumption. ES is generally more honest than "
-                    "VaR because it captures the magnitude of tail losses, not just their threshold."
-                )
-
-                # ----- View 3: Volatility regime -----
-                st.markdown("##### View 3 — Volatility regime indicator")
-
-                # Build a visualization showing current vol vs full historical distribution
-                vol_history = g.conditional_vol
-                vol_levels = sorted(vol_history.values)
-                n = len(vol_levels)
-
-                # Plot histogram + current marker
-                rg_fig = go.Figure()
-                rg_fig.add_trace(go.Histogram(
-                    x=vol_history.values,
-                    nbinsx=40,
-                    marker_color=COLORS["muted"],
-                    opacity=0.7,
-                    name="Historical vol"
-                ))
-                rg_fig.add_vline(
-                    x=g.current_vol,
-                    line=dict(color=COLORS["danger"], width=3, dash="dash"),
-                    annotation_text=f"Current: P{g.vol_percentile:.0f}",
-                    annotation_position="top",
-                )
-                # Regime band shading
-                p25 = float(np.percentile(vol_history.values, 25))
-                p65 = float(np.percentile(vol_history.values, 65))
-                p90 = float(np.percentile(vol_history.values, 90))
-                rg_fig.add_vrect(x0=0, x1=p25, fillcolor="green", opacity=0.05, line_width=0,
-                                    annotation_text="LOW", annotation_position="top left")
-                rg_fig.add_vrect(x0=p25, x1=p65, fillcolor="grey", opacity=0.05, line_width=0,
-                                    annotation_text="NORMAL", annotation_position="top left")
-                rg_fig.add_vrect(x0=p65, x1=p90, fillcolor="orange", opacity=0.10, line_width=0,
-                                    annotation_text="ELEVATED", annotation_position="top left")
-                rg_fig.add_vrect(x0=p90, x1=max(vol_history.values) * 1.05,
-                                    fillcolor="red", opacity=0.15, line_width=0,
-                                    annotation_text="EXTREME", annotation_position="top left")
-                rg_fig.update_layout(**PLOT_BASE, margin=DEFAULT_MARGIN, height=350,
-                                        xaxis_title="Conditional volatility (% / period)",
-                                        yaxis_title="Frequency",
-                                        showlegend=False,
-                                        title=dict(text="Current volatility regime in historical context",
-                                                     font=dict(size=13)))
-                style_axes(rg_fig)
-                st.plotly_chart(rg_fig, use_container_width=True)
-
-                regime_msg = {
-                    "low": "Volatility is unusually subdued. Risk models calibrated here will materially under-estimate stress-period tail risk.",
-                    "normal": "Volatility is in its typical operating range. Standard risk parameters apply.",
-                    "elevated": "Volatility is elevated above norms. Position-sizing should be reduced; expect larger price swings.",
-                    "extreme": "Volatility is in the top decile of historical experience. This is a stress regime — exercise maximum caution on directional positions."
-                }.get(g.regime_label, "")
-                if regime_msg:
-                    st.info(f"**Regime interpretation:** {regime_msg}")
-
-
-# ===== MACRO CALENDAR =====
-with tab_macro:
-    # Window controls
-    cwl1, cwl2, cwl3 = st.columns([1, 1, 2])
-    with cwl1:
-        window_days = st.slider("Forward window (days)", 15, 90, 45, step=15,
-                                  help="Window length from today.")
-    with cwl2:
-        show_past = st.toggle("Include past events", value=False,
-                                help="Also show events from the recent past.")
-        past_days = 30
-        if show_past:
-            past_days = st.slider("Past days", 7, 90, 30, step=7,
-                                    label_visibility="collapsed")
-    with cwl3:
-        if show_past:
-            st.caption(f"Showing **{past_days} past days** + **{window_days} forward days** "
-                        f"from today ({pd.Timestamp.now().strftime('%b %d, %Y')}).")
-        else:
-            st.caption(f"Showing events from **{pd.Timestamp.now().strftime('%b %d, %Y')}** "
-                        f"forward **{window_days} days**. Toggle 'Include past events' "
-                        f"to see recent history.")
-
-    try:
-        cal = cached_macro_calendar(dataset, config_str, window_days,
-                                       show_past, past_days, file_mtime)
-    except Exception as e:
-        st.error(f"Failed to load macro calendar: {type(e).__name__}: {e}")
-        st.info("Make sure `data/macro_calendar.yaml` exists.")
-        cal = None
-
-    if cal is None:
-        st.warning("Macro calendar unavailable — China region required.")
-    elif len(cal.events) == 0:
-        st.warning(f"No events found in the next {window_days} days. "
-                    f"Add events to `data/macro_calendar.yaml`. "
-                    f"Library currently has {cal.n_total_in_library} total events "
-                    f"(all outside the current window).")
-    else:
-        st.markdown(f"#### {cal.window_description}")
-        st.caption(f"Window: **{cal.window_start}** to **{cal.window_end}** ·  "
-                    f"Library: {cal.n_total_in_library} total events ·  "
-                    f"Filtered to window: {len(cal.events)}")
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Events in window", len(cal.events),
-                   f"of {cal.n_total_in_library} in library")
-        c2.metric("HIGH impact", cal.n_high)
-        c3.metric("MED impact", cal.n_med)
-        c4.metric("Iron ore now",
-                   f"P{cal.events[0].iron_ore_percentile:.0f}"
-                   if cal.events[0].iron_ore_percentile else "—",
-                   f"{cal.events[0].spread_regime}".upper())
-
-        # Filter controls
-        st.markdown("---")
-        f1, f2 = st.columns([1, 2])
-        with f1:
-            filter_impact = st.multiselect(
-                "Filter by impact",
-                options=["HIGH", "MED", "LOW"],
-                default=["HIGH", "MED", "LOW"],
-            )
-        with f2:
-            filter_country = st.multiselect(
-                "Filter by country",
-                options=sorted(set(e.country for e in cal.events)),
-                default=sorted(set(e.country for e in cal.events)),
-            )
-
-        filtered_events = [
-            e for e in cal.events
-            if e.impact in filter_impact and e.country in filter_country
-        ]
-
-        # Live interpretation — only intro paragraphs (per-event cards already render below)
-        try:
-            intro_blocks = list(narrator.narrate_macro_calendar_intro(cal))
-            past_msg = f", incl. {past_days}d past" if show_past else ""
-            render_interpretation(
-                intro_blocks,
-                label="Calendar overview interpretation",
-                settings_summary=f"Window: {window_days}d forward{past_msg}, "
-                                  f"{len(filtered_events)} events shown",
-            )
-        except Exception:
-            pass
-
-        st.markdown("---")
-        st.markdown(f"**Showing {len(filtered_events)} of {len(cal.events)} events.** "
-                    f"Each event card includes the transmission mechanism to HRC, "
-                    f"expected reaction by region, and historical analogues from the data.")
-
-        # Render each event as a styled container
-        IMPACT_COLOR = {"HIGH": "#A4161A", "MED": "#C9540F", "LOW": "#5C6B7F"}
-        IMPACT_BG = {"HIGH": "#FEE2E2", "MED": "#FED7AA", "LOW": "#F0F4F8"}
-        CONF_COLOR = {"high": "#2D6A4F", "medium": "#C9540F", "low": "#A4161A", "none": "#5C6B7F"}
-
-        for ev in filtered_events:
-            impact_c = IMPACT_COLOR.get(ev.impact, "#5C6B7F")
-            impact_bg = IMPACT_BG.get(ev.impact, "#F0F4F8")
-            conf_c = CONF_COLOR.get(ev.analogue_confidence, "#5C6B7F")
-
-            # Card container with colored left border
-            st.markdown(
-                f"""<div style="background:white; border:1px solid #E5E9F0;
-                              border-left:4px solid {impact_c};
-                              border-radius:6px; padding:14px 18px; margin:14px 0;">
-                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                    <span style="background:#1A1F2E; color:white; padding:3px 8px;
-                                 border-radius:3px; font-size:0.75rem;
-                                 font-weight:600; font-family:monospace;">{ev.event_date}</span>
-                    <span style="background:{impact_bg}; color:{impact_c};
-                                 padding:2px 8px; border-radius:3px;
-                                 font-size:0.7rem; font-weight:700;">{ev.impact}</span>
-                    <span style="color:#5C6B7F; font-size:0.75rem;
-                                 background:#F0F4F8; padding:2px 8px;
-                                 border-radius:3px;">{ev.country}</span>
-                    <span style="color:{conf_c}; font-size:0.7rem; margin-left:auto;">
-                        analogues: {ev.analogue_confidence} ({ev.cond_n} matches)
-                    </span>
-                </div>
-                <div style="font-size:1.0rem; font-weight:600; margin:8px 0 4px;
-                            color:#1A1F2E;">{ev.name}</div>
-                <div style="font-size:0.8rem; color:#5C6B7F;">
-                    {ev.days_until} days from today ·  {ev.consensus}
-                </div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-
-            # Use expander for the detail content
-            with st.expander("Details: mechanism, reaction, analogues", expanded=False):
-                st.markdown(f"**Affects:** {', '.join(r.title() for r in ev.affects_regions)} ·  "
-                            f"**Channel:** {ev.primary_channel.replace('_', ' ').title()}")
-                st.markdown(f"**Mechanism:**")
-                st.write(ev.mechanism)
-                st.markdown(f"**Expected HRC reaction:**")
-                st.write(ev.expected_hrc_reaction)
-
-                # Analogue summary
-                st.markdown(f"**Historical analogues** ({ev.analogue_confidence} confidence)")
-                if ev.cond_n >= 3 and ev.cond_avg_30d is not None:
-                    a1, a2, a3 = st.columns(3)
-                    a1.metric("Avg 30d HRC move", f"{ev.cond_avg_30d:+.1f}%",
-                                f"{ev.cond_n} matches")
-                    a2.metric("Avg 60d HRC move", f"{ev.cond_avg_60d:+.1f}%")
-                    a3.metric("Avg 90d HRC move", f"{ev.cond_avg_90d:+.1f}%")
-                    st.caption(f"Based on past months with iron ore at "
-                                f"P{ev.iron_ore_percentile:.0f} ±20 and "
-                                f"{ev.spread_regime} spread regime.")
-                elif ev.simple_n >= 6 and ev.simple_avg_30d is not None:
-                    a1, a2, a3 = st.columns(3)
-                    a1.metric("Avg 30d HRC drift", f"{ev.simple_avg_30d:+.1f}%",
-                                "broad sample")
-                    a2.metric("Avg 60d HRC drift", f"{ev.simple_avg_60d:+.1f}%")
-                    a3.metric("Avg 90d HRC drift", f"{ev.simple_avg_90d:+.1f}%")
-                    st.caption(f"Limited setup-conditional matches; showing broader "
-                                f"sample of {ev.simple_n} recent months.")
-                else:
-                    st.info("Insufficient analogues — rely on mechanism above for guidance.")
-
 
 # ===== LIQUIDITY TAB (India only) =====
 if tab_liquidity is not None:
